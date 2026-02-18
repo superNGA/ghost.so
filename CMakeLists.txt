@@ -11,6 +11,8 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 
 SET(SOURCE
     "src/main.c"
+    "src/TargetBrief/TargetBrief_t.c"
+    "src/ShellCode/ShellCode.c"
 )
 
 add_executable(${PROJECT_NAME} ${SOURCE})

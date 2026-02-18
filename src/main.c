@@ -1,7 +1,25 @@
+/*
+
+   A. Run code from inside the target process.
+   B. Manually load shared object and all its dependency, and give it a thread to run.
+
+   C. Combine A & B -> Write manual mapper to target process and load our shared object into 
+        target process.
+
+*/
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <elf.h>
+#include <assert.h>
+#include <malloc.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/mman.h>
+
 #include "Alias.h"
+#include "TargetBrief/TargetBrief_t.h"
+#include "ShellCode/ShellCode.h"
 
 
 #define nullptr    ((void*)NULL)
@@ -10,6 +28,7 @@
 
 ///////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////
+static int  DocumentELF(const char* szFileName);
 static int  GetElfClass(FILE* pFile);
 static void PrintElfHeader64(ElfHeader64* pHeader);
 static void PrintElfHeader32(ElfHeader32* pHeader);
@@ -19,16 +38,42 @@ static void PrintElfHeader32(ElfHeader32* pHeader);
 ///////////////////////////////////////////////////////////////////////////
 int main(int nArgs, char** szArgs)
 {
-    // TODO : we should be getting this via cmd line, but for testing purposes, we 
-    // will hard code it.
-    const char* szTargetSo = TARGET_DLL;
+    if(nArgs <= 1)
+    {
+        printf("Target name not specified\n");
+        return 1;
+    }
 
 
-    FILE* pFile = fopen(szTargetSo, "rb");
+    // Construct target brief.
+    TargetBrief_t target; const char* szTargetName = szArgs[1];
+    if(TargetBrief_InitializeName(&target, szTargetName) == false)
+    {
+        printf("Failed to gather information about target : %s\n", szTargetName);
+        return 1;
+    }
+    printf("(getpid : %d), Name : %s, PID : %d\n", getpid(), target.m_szTargetName, target.m_iTargetPID);
+    printf("\n");
+
+
+    ShellCode_MapSharedObject(TARGET_DLL);
+
+    // DocumentELF(TARGET_DLL);
+
+
+    return 0;
+}
+
+
+///////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////
+static int DocumentELF(const char* szFileName)
+{
+    FILE* pFile = fopen(szFileName, "rb");
     if(pFile == nullptr)
     {
-        printf("Failed to open .so file : %s\n", szTargetSo);
-        return 1;
+        printf("Failed to open .so file : %s\n", szFileName);
+        return 0;
     }
 
 
@@ -37,7 +82,8 @@ int main(int nArgs, char** szArgs)
     if(iElfClass != ELFCLASS64)
     {
         printf("Elf file has an invalid class : %d\n", iElfClass);
-        return 1;
+        fclose(pFile);
+        return 0;
     }
 
 
@@ -45,7 +91,8 @@ int main(int nArgs, char** szArgs)
     if(fseek(pFile, 0, SEEK_SET) != 0)
     {
         printf("Unexpected error encountered @ fseek\n");
-        return 1;
+        fclose(pFile);
+        return 0;
     }
 
     ElfHeader64 iElfHeader;
@@ -53,23 +100,57 @@ int main(int nArgs, char** szArgs)
     if(nItemsRead <= 0)
     {
         printf("Failed to read ELF header\n");
-        return 1;
+        fclose(pFile);
+        return 0;
     }
 
 
+    printf("ELF Header Bytes : \n");
     for(int i = 0; i < sizeof(ElfHeader64); i++)
     {
         printf("%02x ", (int)(((char*)&iElfHeader)[i]));
-        if(((i + 1) % 8) == 0)
+        if(((i + 1) % 16) == 0)
             printf("\n");
     }
+    printf("\n");
 
 
     PrintElfHeader64(&iElfHeader);
 
 
+    // Program headers...
+    fseek(pFile, iElfHeader.e_phoff, SEEK_SET);
+    assert(iElfHeader.e_phentsize == sizeof(Elf64_Phdr) && "Program heaader size doesn't match program header struct size");
+    size_t      nPHBytes       = sizeof(Elf64_Phdr) * iElfHeader.e_phnum;
+    Elf64_Phdr* pProgramHeader = (Elf64_Phdr*)malloc(nPHBytes);
+    fread(pProgramHeader, 1, nPHBytes, pFile);
+
+    for(int i = 0; i < iElfHeader.e_phnum; i++)
+    {
+        switch(pProgramHeader[i].p_type)
+        {
+            case PT_LOAD:         printf("PT_LOAD");         break;
+            case PT_DYNAMIC:      printf("PT_DYNAMIC");      break;
+            case PT_INTERP:       printf("PT_INTERP");       break;
+            case PT_NOTE:         printf("PT_NOTE");         break;
+            case PT_SHLIB:        printf("PT_SHLIB");        break;
+            case PT_PHDR:         printf("PT_PHDR");         break;
+            case PT_TLS:          printf("PT_TLS");          break;
+            case PT_NUM:          printf("PT_NUM");          break;
+            case PT_LOOS:         printf("PT_LOOS");         break;
+            case PT_GNU_EH_FRAME: printf("PT_GNU_EH_FRAME"); break;
+            case PT_GNU_STACK:    printf("PT_GNU_STACK");    break;
+            case PT_GNU_RELRO:    printf("PT_GNU_RELRO");    break;
+            case PT_GNU_PROPERTY: printf("PT_GNU_PROPERTY"); break;
+            case PT_GNU_SFRAME:   printf("PT_GNU_SFRAME");   break;
+            default:              printf("Invalid section type"); break;
+        }
+        printf("\n");
+    }
+
+    free(pProgramHeader);
     fclose(pFile);
-    return 0;
+    return 1;
 }
 
 
@@ -315,19 +396,19 @@ static void PrintElfHeader64(ElfHeader64* pHeader)
         case EM_XCORE:         printf("XMOS xCORE");                                          break;
         case EM_MCHP_PIC:      printf("Microchip 8-bit PIC(r)");                              break;
         case EM_INTELGT:       printf("Intel Graphics Technology");                           break;
-        case EM_KM32:          printf("* KM211 KM32");                                        break;
+        case EM_KM32:          printf("  KM211 KM32");                                        break;
         case EM_KMX32:         printf("KM211 KMX32");                                         break;
         case EM_EMX16:         printf("KM211 KMX16");                                         break;
-        case EM_EMX8:          printf("* KM211 KMX8");                                        break;
+        case EM_EMX8:          printf("  KM211 KMX8");                                        break;
         case EM_KVARC:         printf("KM211 KVARC");                                         break;
-        case EM_CDP:           printf("* Paneve CDP");                                        break;
-        case EM_COGE:          printf("* Cognitive Smart Memory Processor");                  break;
-        case EM_COOL:          printf("* Bluechip CoolEngine");                               break;
-        case EM_NORC:          printf("* Nanoradio Optimized RISC");                          break;
+        case EM_CDP:           printf("  Paneve CDP");                                        break;
+        case EM_COGE:          printf("  Cognitive Smart Memory Processor");                  break;
+        case EM_COOL:          printf("  Bluechip CoolEngine");                               break;
+        case EM_NORC:          printf("  Nanoradio Optimized RISC");                          break;
         case EM_CSR_KALIMBA:   printf("CSR Kalimba");                                         break;
-        case EM_Z80:           printf("* Zilog Z80");                                         break;
+        case EM_Z80:           printf("  Zilog Z80");                                         break;
         case EM_VISIUM:        printf("Controls and Data Services VISIUMcore");               break;
-        case EM_FT32:          printf("* FTDI Chip FT32");                                    break;
+        case EM_FT32:          printf("  FTDI Chip FT32");                                    break;
         case EM_MOXIE:         printf("Moxie processor");                                     break;
         case EM_AMDGPU:        printf("AMD GPU");                                             break;
         case EM_RISCV:         printf("RISC-V");                                              break;
@@ -338,4 +419,15 @@ static void PrintElfHeader64(ElfHeader64* pHeader)
         default: printf("Invalid machine code"); break;
     }
     printf("\n");
+
+
+    printf("Entry                        : %p\n", (void*)pHeader->e_entry);
+    printf("Program Header Table Offset  : %lu\n", pHeader->e_phoff);
+    printf("Section Header Table Offset  : %lu\n", pHeader->e_shoff);
+    printf("Flags                        : %u\n",  pHeader->e_flags);
+    printf("ELF Header Size              : %u\n",  pHeader->e_ehsize);
+    printf("Program Header Count         : %u\n",  pHeader->e_phnum);
+    printf("Program Header Size          : %u\n",  pHeader->e_phentsize);
+    printf("Section Header Count         : %u\n",  pHeader->e_shnum);
+    printf("Section Header Size          : %u\n",  pHeader->e_shentsize);
 }
