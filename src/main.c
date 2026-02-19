@@ -11,7 +11,6 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <elf.h>
-#include <assert.h>
 #include <malloc.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -20,6 +19,7 @@
 #include "Alias.h"
 #include "TargetBrief/TargetBrief_t.h"
 #include "ShellCode/ShellCode.h"
+#include "Util/Assertions/Assertions.h"
 
 
 #define nullptr    ((void*)NULL)
@@ -56,7 +56,7 @@ int main(int nArgs, char** szArgs)
     printf("\n");
 
 
-    ShellCode_MapSharedObject(TARGET_DLL);
+    ShellCode_MapSharedObject(TARGET_DLL, &target);
 
     // DocumentELF(TARGET_DLL);
 
@@ -120,7 +120,7 @@ static int DocumentELF(const char* szFileName)
 
     // Program headers...
     fseek(pFile, iElfHeader.e_phoff, SEEK_SET);
-    assert(iElfHeader.e_phentsize == sizeof(Elf64_Phdr) && "Program heaader size doesn't match program header struct size");
+    assertion(iElfHeader.e_phentsize == sizeof(Elf64_Phdr) && "Program heaader size doesn't match program header struct size");
     size_t      nPHBytes       = sizeof(Elf64_Phdr) * iElfHeader.e_phnum;
     Elf64_Phdr* pProgramHeader = (Elf64_Phdr*)malloc(nPHBytes);
     fread(pProgramHeader, 1, nPHBytes, pFile);

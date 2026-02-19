@@ -13,6 +13,7 @@ SET(SOURCE
     "src/main.c"
     "src/TargetBrief/TargetBrief_t.c"
     "src/ShellCode/ShellCode.c"
+    "src/Util/Terminal/ConsoleSystem.c"
 )
 
 add_executable(${PROJECT_NAME} ${SOURCE})

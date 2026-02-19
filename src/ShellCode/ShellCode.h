@@ -10,9 +10,11 @@
 #define SHELLCODE_H
 
 
+struct TargetBrief_t;
+
 
 /* Generate shell code to load all PT_LOAD segments of given file. */
-int ShellCode_MapSharedObject(const char* szFile);
+int ShellCode_MapSharedObject(const char* szFile, struct TargetBrief_t* pTarget);
 
 
 
