@@ -9,10 +9,10 @@
 #ifndef ALIAS_H
 #define ALIAS_H
 
-struct Elf64_Ehdr;
-typedef Elf64_Ehdr ElfHeader64;
-struct Elf32_Ehdr;
-typedef Elf32_Ehdr ElfHeader32;
+#include <stdbool.h> // we want booleans everywhere.
+
+
+#define nullptr ((void*)NULL)
 
 
 #endif

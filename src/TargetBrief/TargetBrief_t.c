@@ -12,7 +12,8 @@
 #include <stdbool.h>
 #include <dirent.h>
 #include <string.h>
-#include "../Types.h"
+
+#include "../Alias.h"
 
 
 

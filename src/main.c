@@ -16,7 +16,6 @@
 #include <fcntl.h>
 #include <sys/mman.h>
 
-#include "Alias.h"
 #include "TargetBrief/TargetBrief_t.h"
 #include "ShellCode/ShellCode.h"
 #include "Util/Assertions/Assertions.h"
@@ -30,8 +29,8 @@
 ///////////////////////////////////////////////////////////////////////////
 static int  DocumentELF(const char* szFileName);
 static int  GetElfClass(FILE* pFile);
-static void PrintElfHeader64(ElfHeader64* pHeader);
-static void PrintElfHeader32(ElfHeader32* pHeader);
+static void PrintElf64_Ehdr(Elf64_Ehdr* pHeader);
+static void PrintElfHeader32(Elf32_Ehdr* pHeader);
 
 
 ///////////////////////////////////////////////////////////////////////////
@@ -57,8 +56,6 @@ int main(int nArgs, char** szArgs)
 
 
     ShellCode_MapSharedObject(TARGET_DLL, &target);
-
-    // DocumentELF(TARGET_DLL);
 
 
     return 0;
@@ -95,8 +92,8 @@ static int DocumentELF(const char* szFileName)
         return 0;
     }
 
-    ElfHeader64 iElfHeader;
-    int         nItemsRead = fread(&iElfHeader, 1, sizeof(ElfHeader64), pFile);
+    Elf64_Ehdr iElfHeader;
+    int         nItemsRead = fread(&iElfHeader, 1, sizeof(Elf64_Ehdr), pFile);
     if(nItemsRead <= 0)
     {
         printf("Failed to read ELF header\n");
@@ -106,7 +103,7 @@ static int DocumentELF(const char* szFileName)
 
 
     printf("ELF Header Bytes : \n");
-    for(int i = 0; i < sizeof(ElfHeader64); i++)
+    for(int i = 0; i < sizeof(Elf64_Ehdr); i++)
     {
         printf("%02x ", (int)(((char*)&iElfHeader)[i]));
         if(((i + 1) % 16) == 0)
@@ -115,7 +112,7 @@ static int DocumentELF(const char* szFileName)
     printf("\n");
 
 
-    PrintElfHeader64(&iElfHeader);
+    PrintElf64_Ehdr(&iElfHeader);
 
 
     // Program headers...
@@ -171,7 +168,7 @@ static int GetElfClass(FILE* pFile)
 
 ///////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////
-static void PrintElfHeader64(ElfHeader64* pHeader)
+static void PrintElf64_Ehdr(Elf64_Ehdr* pHeader)
 {
     printf("Magic                        : '%c%c%c%c'\n", pHeader->e_ident[0], pHeader->e_ident[1], pHeader->e_ident[2], pHeader->e_ident[3]);
     printf("ELF class                    : ");
