@@ -32,11 +32,10 @@
 
 /*
 
-TODO: Generate custom shell code for shared object.
-TODO: Inject custom shell code.
-TODO: Run custom shell code.
-TODO: Load all PT_LOAD segments into mmap-ed regions.
-TODO: Restore target from shellcode, and make it resume properly.
+TODO: Find where are the reloation tables.
+TODO: Find where are the dependency names, that we need to load.
+TODO: Handle relocations.
+TODO: Init arrays-n-shit.
 
  */
 
@@ -54,8 +53,10 @@ typedef struct Thread_t Thread_t;
 
 ///////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////
-static Elf64_Ehdr* g_pElfHeader  = NULL;
-static Elf64_Phdr* g_pSegHeaders = NULL;
+static Elf64_Ehdr* g_pElfHeader   = nullptr; // Elf header...
+static Elf64_Phdr* g_pProHeaders  = nullptr; // Segment or Program headers...
+static Elf64_Shdr* g_pSecHeaders  = nullptr; // Sections headers...
+static const char* g_pSecStrTable = nullptr; // Section header string table...
 
 
 
@@ -64,52 +65,361 @@ static Elf64_Phdr* g_pSegHeaders = NULL;
 static void* ShellCode_MmapViaCodeInjection(void* pAddress, size_t iSize, TargetBrief_t* pTarget);
 static bool  ShellCode_WriteBytes          (unsigned char* pBytes, size_t nBytes, void* pAddress, pid_t iThreadID);
 static bool  ShellCode_WriteBytesFromFile  (const char* szFilePath, Elf64_Phdr* pSegment, void* pAddress, TargetBrief_t* pTarget);
+static bool  ShellCode_ReadBytesFromFile   (const char* szFilePath, uint64_t iOffset, void* pBuffer, size_t nBytes);
 static bool  ShellCode_ReadBytes           (unsigned char* pBytes, size_t nBytes, void* pAddress, pid_t iThreadID);
 static bool  ShellCode_StopAllThreads      (TargetBrief_t* pTarget);
 static bool  ShellCode_StartAllThreads     (TargetBrief_t* pTarget);
 static bool  ShellCode_GetAllThreads       (pid_t iTargetPID, Thread_t** pThreadsOut, int* nThreads);
 
 
+///////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////
+static const char* ShellCode_StrTableIndex(int iIndex, const char* szStrTbl, size_t iTableSizeInBytes)
+{
+    int iCurIndex = 0;
+    for(size_t iChar = 0; iChar < iTableSizeInBytes; iChar++)
+    {
+        if(iCurIndex == iIndex)
+            return szStrTbl + iChar;
+
+        if(szStrTbl[iChar] == '\0')
+            iCurIndex++;
+    }
+
+    return nullptr;
+}
+
+
+///////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////
+static void Relocations(const char* szFilePath)
+{
+
+    for(int iSegmentIndex = 0; iSegmentIndex < g_pElfHeader->e_phnum; iSegmentIndex++)
+    {
+        Elf64_Phdr* pSegment = &g_pProHeaders[iSegmentIndex];
+
+        // Copy dynamic entries ( shits ) into our memory.
+        if(pSegment->p_type != PT_DYNAMIC)
+            continue;
+
+        Elf64_Dyn* pDynamicShits = malloc(pSegment->p_filesz);
+        if(ShellCode_ReadBytesFromFile(szFilePath, pSegment->p_offset, pDynamicShits, pSegment->p_filesz) == false)
+        {
+            FAIL_LOG("Failed to read dynamic shits from file");
+            free(pDynamicShits);
+            continue;
+        }
+
+        // How many dynamic shits do we have.
+        size_t nDynamicShits = pSegment->p_filesz / sizeof(Elf64_Dyn);
+        WIN_LOG("We have %zu Dynamic shits", nDynamicShits);
+
+
+        // Allocating string table.
+        const char* szDynamicStrTbl  = nullptr;
+        size_t      iStringTableSize = 0;
+        for(size_t iDynEntryIndex = 0; iDynEntryIndex < nDynamicShits; iDynEntryIndex++)
+        {
+            Elf64_Dyn* pDynEntry = &pDynamicShits[iDynEntryIndex];
+            if(pDynEntry->d_tag == DT_STRSZ)
+            {
+                iStringTableSize = pDynEntry->d_un.d_val;
+                szDynamicStrTbl  = (const char*)malloc(pDynEntry->d_un.d_val);
+                break;
+            }
+        }
+        WIN_LOG("String table size : %zu", iStringTableSize);
+
+
+        // Acquiring string table.
+        for(size_t iDynEntryIndex = 0; iDynEntryIndex < nDynamicShits; iDynEntryIndex++)
+        {
+            Elf64_Dyn* pDynEntry = &pDynamicShits[iDynEntryIndex];
+            if(pDynEntry->d_tag == DT_STRTAB)
+            {
+                uint64_t iOffset = 0;
+                for(size_t i = 0; i < g_pElfHeader->e_phnum; i++)
+                {
+                    Elf64_Phdr* pSeg = &g_pProHeaders[i];
+                    if(pDynEntry->d_un.d_ptr >= pSeg->p_vaddr && pDynEntry->d_un.d_ptr < pSeg->p_vaddr + pSeg->p_memsz)
+                    {
+                        iOffset = pSeg->p_offset + pDynEntry->d_un.d_ptr - pSeg->p_vaddr;
+                        break;
+                    }
+                }
+                LOG("Reading string table from offset : %zu", iOffset);
+                if(ShellCode_ReadBytesFromFile(szFilePath, iOffset, (void*)szDynamicStrTbl, iStringTableSize) == false)
+                {
+                    FAIL_LOG("Failed to get dynamic string table");
+                    abort();
+                }
+                break;
+            }
+        }
+
+
+        // All string in the string table.
+        int i = 0;
+        while(true)
+        {
+            printf("%c", szDynamicStrTbl[i]);
+
+            if(szDynamicStrTbl[i] == 0)
+                printf("\n%d : ", i + 1);
+
+            i++;
+
+            if(i >= iStringTableSize)
+                break;
+        }
+
+
+        // Allocating string table.
+        Elf64_Sym* pSymbolTbl     = nullptr;
+        size_t     iSymbolTblSize = 0;
+        for(size_t iDynEntryIndex = 0; iDynEntryIndex < nDynamicShits; iDynEntryIndex++)
+        {
+            Elf64_Dyn* pDynEntry = &pDynamicShits[iDynEntryIndex];
+
+            if(pDynEntry->d_tag == DT_HASH)
+            {
+                WIN_LOG("Captured symbol talbe size");
+                iSymbolTblSize = pDynEntry->d_un.d_val;
+                pSymbolTbl     = malloc(iSymbolTblSize);
+                break;
+            }
+        }
+        WIN_LOG("Symbol table size : %zu", iSymbolTblSize);
+
+
+
+        free(pDynamicShits);
+    }
+}
+
+
+///////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////
+static void DynamicShits(const char* szFilePath)
+{
+    for(int iSegmentIndex = 0; iSegmentIndex < g_pElfHeader->e_phnum; iSegmentIndex++)
+    {
+        Elf64_Phdr* pSegment = &g_pProHeaders[iSegmentIndex];
+
+        if(true)
+        {
+            switch(pSegment->p_type)
+            {
+                case PT_NULL:         printf("PT_NULL");             break;
+                case PT_LOAD:         printf("PT_LOAD");             break;
+                case PT_DYNAMIC:      printf("PT_DYNAMIC");          break;
+                case PT_INTERP:       printf("PT_INTERP");           break;
+                case PT_NOTE:         printf("PT_NOTE");             break;
+                case PT_SHLIB:        printf("PT_SHLIB");            break;
+                case PT_PHDR:         printf("PT_PHDR");             break;
+                case PT_TLS:          printf("PT_TLS");              break;
+                case PT_NUM:          printf("PT_NUM");              break;
+                case PT_LOOS:         printf("PT_LOOS");             break;
+                case PT_GNU_EH_FRAME: printf("PT_GNU_EH_FRAME");     break;
+                case PT_GNU_STACK:    printf("PT_GNU_STACK");        break;
+                case PT_GNU_RELRO:    printf("PT_GNU_RELRO");        break;
+                case PT_GNU_PROPERTY: printf("PT_GNU_PROPERTY");     break;
+                case PT_GNU_SFRAME:   printf("PT_GNU_SFRAME");       break;
+                case PT_LOSUNW:       printf("PT_LOSUNW");           break;
+                case PT_SUNWSTACK:    printf("PT_SUNWSTACK");        break;
+                case PT_HISUNW:       printf("PT_HISUNW");           break;
+                case PT_LOPROC:       printf("PT_LOPROC");           break;
+                case PT_HIPROC:       printf("PT_HIPROC");           break;
+                default:              printf("Invalid ass segment"); break;
+            }
+            printf("\n");
+        }
+
+
+        // Copy dynamic entries ( shits ) into our memory.
+        if(pSegment->p_type != PT_DYNAMIC)
+            continue;
+
+        Elf64_Dyn* pDynamicShits = malloc(pSegment->p_filesz);
+        if(ShellCode_ReadBytesFromFile(szFilePath, pSegment->p_offset, pDynamicShits, pSegment->p_filesz) == false)
+        {
+            FAIL_LOG("Failed to read dynamic shits from file");
+            free(pDynamicShits);
+            continue;
+        }
+
+        // How many dynamic shits do we have.
+        size_t nDynamicShits = pSegment->p_filesz / sizeof(Elf64_Dyn);
+        WIN_LOG("We have %zu Dynamic shits", nDynamicShits);
+
+
+        // Allocating string table.
+        const char* szDynamicStrTbl  = nullptr;
+        size_t      iStringTableSize = 0;
+        for(size_t iDynEntryIndex = 0; iDynEntryIndex < nDynamicShits; iDynEntryIndex++)
+        {
+            Elf64_Dyn* pDynEntry = &pDynamicShits[iDynEntryIndex];
+            if(pDynEntry->d_tag == DT_STRSZ)
+            {
+                iStringTableSize = pDynEntry->d_un.d_val;
+                szDynamicStrTbl  = (const char*)malloc(pDynEntry->d_un.d_val);
+                break;
+            }
+        }
+        WIN_LOG("String table size : %zu", iStringTableSize);
+
+
+        // Acquiring string table.
+        for(size_t iDynEntryIndex = 0; iDynEntryIndex < nDynamicShits; iDynEntryIndex++)
+        {
+            Elf64_Dyn* pDynEntry = &pDynamicShits[iDynEntryIndex];
+            if(pDynEntry->d_tag == DT_STRTAB)
+            {
+                uint64_t iOffset = 0;
+                for(size_t i = 0; i < g_pElfHeader->e_phnum; i++)
+                {
+                    Elf64_Phdr* pSeg = &g_pProHeaders[i];
+                    if(pDynEntry->d_un.d_ptr >= pSeg->p_vaddr && pDynEntry->d_un.d_ptr < pSeg->p_vaddr + pSeg->p_memsz)
+                    {
+                        // iOffset = g_pElfHeader->e_phoff + (pSeg - g_pProHeaders) + pDynEntry->d_un.d_ptr - pSeg->p_vaddr;
+                        iOffset = pSeg->p_offset + pDynEntry->d_un.d_ptr - pSeg->p_vaddr;
+                        break;
+                    }
+                }
+                LOG("Reading string table from offset : %zu", iOffset);
+                if(ShellCode_ReadBytesFromFile(szFilePath, iOffset, (void*)szDynamicStrTbl, iStringTableSize) == false)
+                {
+                    FAIL_LOG("Failed to get dynamic string table");
+                    abort();
+                }
+                break;
+            }
+        }
+
+
+        // All string in the string table.
+        int i = 0;
+        while(true)
+        {
+            printf("%c", szDynamicStrTbl[i]);
+
+            if(szDynamicStrTbl[i] == 0)
+                printf("\n%d : ", i + 1);
+
+            i++;
+
+            if(i >= iStringTableSize)
+                break;
+        }
+
+
+        for(size_t iDynEntryIndex = 0; iDynEntryIndex < nDynamicShits; iDynEntryIndex++)
+        {
+            Elf64_Dyn* pDynEntry = &pDynamicShits[iDynEntryIndex];
+
+            if(pDynEntry->d_tag != DT_NEEDED)
+                continue;
+
+            LOG("%lu, %s", pDynEntry->d_un.d_val, szDynamicStrTbl + pDynEntry->d_un.d_val);
+        }
+
+        for(size_t iDynEntryIndex = 0; iDynEntryIndex < nDynamicShits; iDynEntryIndex++)
+        {
+            Elf64_Dyn* pDynEntry = &pDynamicShits[iDynEntryIndex];
+
+            switch(pDynEntry->d_tag)
+            {
+                case DT_NULL:            printf("DT_NULL");            break;
+                case DT_NEEDED:          printf("DT_NEEDED");          break;
+                case DT_PLTRELSZ:        printf("DT_PLTRELSZ");        break;
+                case DT_PLTGOT:          printf("DT_PLTGOT");          break;
+                case DT_HASH:            printf("DT_HASH");            break;
+                case DT_STRTAB:          printf("DT_STRTAB");          break;
+                case DT_SYMTAB:          printf("DT_SYMTAB");          break;
+                case DT_RELA:            printf("DT_RELA");            break;
+                case DT_RELASZ:          printf("DT_RELASZ");          break;
+                case DT_RELAENT:         printf("DT_RELAENT");         break;
+                case DT_STRSZ:           printf("DT_STRSZ");           break;
+                case DT_SYMENT:          printf("DT_SYMENT");          break;
+                case DT_INIT:            printf("DT_INIT");            break;
+                case DT_FINI:            printf("DT_FINI");            break;
+                case DT_SONAME:          printf("DT_SONAME");          break;
+                case DT_RPATH:           printf("DT_RPATH");           break;
+                case DT_SYMBOLIC:        printf("DT_SYMBOLIC");        break;
+                case DT_REL:             printf("DT_REL");             break;
+                case DT_RELSZ:           printf("DT_RELSZ");           break;
+                case DT_RELENT:          printf("DT_RELENT");          break;
+                case DT_PLTREL:          printf("DT_PLTREL");          break;
+                case DT_DEBUG:           printf("DT_DEBUG");           break;
+                case DT_TEXTREL:         printf("DT_TEXTREL");         break;
+                case DT_JMPREL:          printf("DT_JMPREL");          break;
+                case DT_BIND_NOW:        printf("DT_BIND_NOW");        break;
+                case DT_INIT_ARRAY:      printf("DT_INIT_ARRAY");      break;
+                case DT_FINI_ARRAY:      printf("DT_FINI_ARRAY");      break;
+                case DT_INIT_ARRAYSZ:    printf("DT_INIT_ARRAYSZ");    break;
+                case DT_FINI_ARRAYSZ:    printf("DT_FINI_ARRAYSZ");    break;
+                case DT_RUNPATH:         printf("DT_RUNPATH");         break;
+                case DT_FLAGS:           printf("DT_FLAGS");           break;
+                case DT_ENCODING:        printf("DT_ENCODING");        break;
+                case DT_PREINIT_ARRAYSZ: printf("DT_PREINIT_ARRAYSZ"); break;
+                case DT_SYMTAB_SHNDX:    printf("DT_SYMTAB_SHNDX");    break;
+                case DT_RELRSZ:          printf("DT_RELRSZ");          break;
+                case DT_RELR:            printf("DT_RELR");            break;
+                case DT_RELRENT:         printf("DT_RELRENT");         break;
+
+                default: break;
+            }
+            printf("\n");
+
+
+            if(pDynEntry->d_tag != DT_SYMTAB)
+                continue;
+        }
+
+        free(pDynamicShits);
+    }
+}
+
 
 ///////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////
 bool ShellCode_MapSharedObject(const char* szFile, TargetBrief_t* pTarget)
 {
-    assertion(g_pElfHeader == NULL && g_pSegHeaders == NULL && "Global objects are already initialized.");
+    assertion(g_pElfHeader == NULL && g_pProHeaders == NULL && "Global objects are already initialized.");
 
 
-    FILE* pFile = fopen(szFile, "r");
-    if(pFile == nullptr)
-    {
-        FAIL_LOG("Failed to open file : %s", szFile);
-        return false;
-    }
+    // Elf header...
+    g_pElfHeader = (Elf64_Ehdr*)malloc(sizeof(Elf64_Ehdr));
+    ShellCode_ReadBytesFromFile(szFile, 0, g_pElfHeader, sizeof(Elf64_Ehdr));
 
-    fseek(pFile, 0, SEEK_SET); // just to make sure.
+    // Program ( segment ) headers...
+    size_t iProHdrSize = g_pElfHeader->e_phentsize * g_pElfHeader->e_phnum;
+    g_pProHeaders      = (Elf64_Phdr*)malloc(iProHdrSize);
+    ShellCode_ReadBytesFromFile(szFile, g_pElfHeader->e_phoff, g_pProHeaders, iProHdrSize);
 
-    // Read header.
-    g_pElfHeader      = malloc(sizeof(Elf64_Ehdr));
-    size_t nBytesRead = fread(g_pElfHeader, 1, sizeof(Elf64_Ehdr), pFile);
-    if(nBytesRead == 0)
-    {
-        fclose(pFile);
-        return false;
-    }
-
+    // Section headers...
+    size_t iSecHdrSize  = g_pElfHeader->e_shentsize * g_pElfHeader->e_shnum;
+    g_pSecHeaders       = (Elf64_Shdr*)malloc(iSecHdrSize);
+    ShellCode_ReadBytesFromFile(szFile, g_pElfHeader->e_shoff, g_pSecHeaders, iSecHdrSize);
 
     // Our Given shared object must be valid.
     assertion(g_pElfHeader->e_ehsize    == sizeof(Elf64_Ehdr) && "Invalid ELF header entry size in given shared object.");
     assertion(g_pElfHeader->e_phentsize == sizeof(Elf64_Phdr) && "Invalid program header entry size in given shared object.");
+    assertion(g_pElfHeader->e_shentsize == sizeof(Elf64_Shdr) && "Invalid section header entry size in given shared object.");
 
 
-    // Go to program ( segment ) headers.
-    fseek(pFile, g_pElfHeader->e_phoff, SEEK_SET);
+    // Storing section header string table.
+    Elf64_Shdr* pSecHdr = &g_pSecHeaders[g_pElfHeader->e_shstrndx];
+    g_pSecStrTable      = malloc(pSecHdr->sh_size);
+    ShellCode_ReadBytesFromFile(szFile, pSecHdr->sh_offset, (void*)g_pSecStrTable, pSecHdr->sh_size);
 
-    size_t iSegHeaderSize = g_pElfHeader->e_phentsize * g_pElfHeader->e_phnum;
-    g_pSegHeaders         = (Elf64_Phdr*)malloc(iSegHeaderSize);
-    fread(g_pSegHeaders, 1, iSegHeaderSize, pFile); // reading headers into our buffer.
 
-    fclose(pFile);
+    // Delete this. 
+    // This is so that we can fuck around with section headers.
+    // DynamicShits(szFile);
+    Relocations(szFile);
+    return true;
 
 
     // Stop this shit.
@@ -119,7 +429,7 @@ bool ShellCode_MapSharedObject(const char* szFile, TargetBrief_t* pTarget)
 
     for(int iSegIndex = 0; iSegIndex < g_pElfHeader->e_phnum; iSegIndex++)
     {
-        Elf64_Phdr* pSegHeader = &g_pSegHeaders[iSegIndex];
+        Elf64_Phdr* pSegHeader = &g_pProHeaders[iSegIndex];
 
         if(pSegHeader->p_type != PT_LOAD)
             continue;
@@ -383,6 +693,26 @@ static bool ShellCode_WriteBytesFromFile(const char* szFilePath, Elf64_Phdr* pSe
     free(pSegContents);
     fclose(pFile);
     return true;
+}
+
+
+///////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////
+static bool ShellCode_ReadBytesFromFile(const char* szFilePath, uint64_t iOffset, void* pBuffer, size_t nBytes)
+{
+    FILE* pFile = fopen(szFilePath, "r");
+    if(pFile == nullptr)
+        return false;
+
+
+    fseek(pFile, iOffset, SEEK_SET);
+
+    uint64_t nBytesRead = fread(pBuffer, 1, nBytes, pFile);
+
+    fclose(pFile);
+
+    // We read all bytes or not?
+    return nBytes == nBytesRead;
 }
 
 

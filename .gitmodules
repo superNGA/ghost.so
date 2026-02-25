@@ -1,0 +1,3 @@
+[submodule "lib/ILIB"]
+	path = lib/ILIB
+	url = https://github.com/superNGA/ILIB.git
