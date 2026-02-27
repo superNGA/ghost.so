@@ -24,20 +24,11 @@
 
 // Util
 #include "../Alias.h"
-#include "../Util/Assertions/Assertions.h"
+#include "../../lib/ILIB/ILIB_Assertion.h"
 #include "../Util/Terminal/Terminal.h"
 
 #include "../TargetBrief/TargetBrief_t.h"
 
-
-/*
-
-TODO: Find where are the reloation tables.
-TODO: Find where are the dependency names, that we need to load.
-TODO: Handle relocations.
-TODO: Init arrays-n-shit.
-
- */
 
 
 

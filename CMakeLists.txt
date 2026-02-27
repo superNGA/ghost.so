@@ -14,6 +14,8 @@ SET(SOURCE
     "src/TargetBrief/TargetBrief_t.c"
     "src/ShellCode/ShellCode.c"
     "src/Util/Terminal/ConsoleSystem.c"
+    "src/Util/Util.c"
+    "src/MappedObject/MappedObject.c"
 )
 
 add_executable(${PROJECT_NAME} ${SOURCE})
