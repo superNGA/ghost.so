@@ -1,14 +1,26 @@
 #include <stdbool.h>
 #include <stdio.h>
-#include <string.h>
 #include <unistd.h>
 
 #include "TargetBrief/TargetBrief_t.h"
 #include "MappedObject/MappedObject.h"
+#include "ShellCode/ShellCodeV2.h"
+
+// Util...
 #include "Util/Terminal/Terminal.h"
+#include "Util/AAManager/AAManager.h"
 
 
-/* Final goal. Map target shared object into memory and all its dependencies. */
+/* 
+
+Final goal. Map target shared object into memory and all its dependencies.
+
+TODO: Ignore finding dependency in the target's maps. Just do it manually.
+TODO: Construct a clean and absolute mmap allocation solution.
+TODO: Construct a clean and absolute mmap free solution.
+
+*/
+
 static void PrintDependencyTree(MappedObject_t* pObj, int iIndentation);
 
 
@@ -50,11 +62,25 @@ int main(int nArgs, char** szArgs)
 
     
     // Dependency tree.
-    PrintDependencyTree(&obj, 0);
+    // PrintDependencyTree(&obj, 0);
 
 
+    if(ShellCode_StopTargetAllThreads(&target) == false)
+    {
+        FAIL_LOG("Failed to stop target");
+        return 1;
+    }
 
-    MappedObject_Uninitialize(&obj);
+    LOG("Stopped target");
+    
+    if(ShellCode_StartTargetAllThreads(&target) == false)
+    {
+        FAIL_LOG("Failed to start target");
+        return 1;
+    }
+
+
+    AAManager_UninitializeAll();
     return 0;
 }
 

@@ -20,11 +20,12 @@
 // ILIB...
 #include "../../lib/ILIB/ILIB_Vector.h"
 #include "../../lib/ILIB/ILIB_ArenaAllocator.h"
+#include "../Util/AAManager/AAManager.h"
 
 
 // Globals...
-static ArenaAllocator_t g_arenaAlloc;
-static bool             g_bArenaInitialized = false;
+static ArenaAllocator_t* g_pArenaAlloc;
+REGISTER_ARENA_ALLOCATOR(g_pArenaAlloc);
 
 
 static bool InitMappedObject(MappedObject_t* pObj, const char* szFile);
@@ -38,15 +39,6 @@ static MappedObject_t* FindDependency(MappedObject_t* pHead, const char* szDepen
 ///////////////////////////////////////////////////////////////////////////
 bool MappedObject_Initialize(MappedObject_t* pObj, const char* szFile)
 {
-    // Initialize arena allocator.
-    if(g_bArenaInitialized == false)
-    {
-        g_bArenaInitialized = ArenaAllocator_Initialize(&g_arenaAlloc, 2, STD_ARENA_SIZE);
-        if(g_bArenaInitialized == false)
-            return false;
-    }
-
-
     bool bParentInit = InitMappedObject(pObj, szFile);
     if(bParentInit == false)
         return false;
@@ -62,24 +54,10 @@ bool MappedObject_Initialize(MappedObject_t* pObj, const char* szFile)
 
     // Allocation size. Just for debugging purposes.
     LOG("Size : %zu, Arena Count : %zu, Capacity : %zu", 
-            ArenaAllocator_SizeAll   (&g_arenaAlloc), 
-            ArenaAllocator_ArenaCount(&g_arenaAlloc),
-            ArenaAllocator_Capacity  (&g_arenaAlloc));
+            ArenaAllocator_SizeAll   (g_pArenaAlloc), 
+            ArenaAllocator_ArenaCount(g_pArenaAlloc),
+            ArenaAllocator_Capacity  (g_pArenaAlloc));
 
-    return true;
-}
-
-
-///////////////////////////////////////////////////////////////////////////
-///////////////////////////////////////////////////////////////////////////
-bool MappedObject_Uninitialize(MappedObject_t* pHead)
-{
-    // What I should have done here is do either DFS or BFS and free all 
-    // from down to up ( dependency to parent ). But since we are using a 
-    // arena allocator, we will just 0 it all :)
-
-    ArenaAllocator_Free(&g_arenaAlloc);
-    memset(pHead, 0, sizeof(MappedObject_t));
     return true;
 }
 
@@ -100,7 +78,7 @@ static bool InitMappedObject(MappedObject_t* pObj, const char* szFile)
     
     // Read program headers.
     size_t iProHeaderSize = pObj->m_elfHeader.e_phentsize * pObj->m_elfHeader.e_phnum;
-    pObj->m_pProHeader    = ArenaAllocator_Allocate(&g_arenaAlloc, iProHeaderSize);
+    pObj->m_pProHeader    = ArenaAllocator_Allocate(g_pArenaAlloc, iProHeaderSize);
     assertion(pObj->m_pProHeader != nullptr && "Failed to allocate memory to program headers");
 
     if(Util_ReadFromFile(szFile, pObj->m_pProHeader, pObj->m_elfHeader.e_phoff, iProHeaderSize) != iProHeaderSize)
@@ -124,7 +102,7 @@ static bool InitMappedObject(MappedObject_t* pObj, const char* szFile)
 
 
     // Read dynamic segments.
-    pObj->m_pDynamicEntries = ArenaAllocator_Allocate(&g_arenaAlloc, pDynSegment->p_filesz);
+    pObj->m_pDynamicEntries = ArenaAllocator_Allocate(g_pArenaAlloc, pDynSegment->p_filesz);
     assertion(pObj->m_pDynamicEntries != nullptr && "Failed to allocate memory to Dynamic segment.");
     if(Util_ReadFromFile(szFile, pObj->m_pDynamicEntries, pDynSegment->p_offset, pDynSegment->p_filesz) != pDynSegment->p_filesz)
         return false;
@@ -183,7 +161,7 @@ static bool StoreStringTable(MappedObject_t* pObj)
     }
 
 
-    pObj->m_szStringTable = ArenaAllocator_Allocate(&g_arenaAlloc, pObj->m_iStringTableSize);
+    pObj->m_szStringTable = ArenaAllocator_Allocate(g_pArenaAlloc, pObj->m_iStringTableSize);
 
     // string table address to offset in file.
     size_t nStrTblBytes = 0;
@@ -235,7 +213,7 @@ static bool ResolveDependencies(MappedObject_t* pHead, MappedObject_t* pObj)
     // Allocate memory for dependencies.
     pObj->m_nDependencies     = Vector_Len(vecNeededEntIndex);
     size_t iDependencyArrSize = sizeof(MappedObject_t*) * pObj->m_nDependencies; // array of pointers to MappedObject_t(s).
-    pObj->m_pDependencies     = ArenaAllocator_Allocate(&g_arenaAlloc, iDependencyArrSize);
+    pObj->m_pDependencies     = ArenaAllocator_Allocate(g_pArenaAlloc, iDependencyArrSize);
     memset(pObj->m_pDependencies, 0, iDependencyArrSize);
 
 
@@ -284,7 +262,7 @@ static bool ResolveDependencies(MappedObject_t* pHead, MappedObject_t* pObj)
         }
         else
         {
-            MappedObject_t* pUniqueDependency = ArenaAllocator_Allocate(&g_arenaAlloc, sizeof(MappedObject_t));
+            MappedObject_t* pUniqueDependency = ArenaAllocator_Allocate(g_pArenaAlloc, sizeof(MappedObject_t));
 
             if(InitMappedObject(pUniqueDependency, s_szFileNameBuffer) == false)
             {

@@ -28,6 +28,7 @@ typedef struct TargetBrief_t TargetBrief_t;
 /* To initialize TargetBrief_t from target process's ID. */
 int TargetBrief_InitializePID(TargetBrief_t* pThis, pid_t iTargetPID);
 
+
 /* To initialize TargetBrief_t from target process's name.
    Target process name will only be effective after the last backslash (/) 
    so absolute or relative addresses are also fine.*/
