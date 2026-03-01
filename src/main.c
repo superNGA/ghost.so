@@ -7,10 +7,14 @@
 #include "TargetBrief/TargetBrief_t.h"
 #include "MappedObject/MappedObject.h"
 #include "ShellCode/ShellCodeV2.h"
+#include "MapParser/MapParser.h"
 
 // Util...
 #include "Util/Terminal/Terminal.h"
 #include "Util/AAManager/AAManager.h"
+
+// ILIB...
+#include "../lib/ILIB/ILIB_Vector.h"
 
 
 /* 
@@ -24,6 +28,7 @@ TODO: Construct a clean and absolute mmap free solution.
 */
 
 static void PrintDependencyTree(MappedObject_t* pObj, int iIndentation);
+static void PrintMapEntries(MapEntry_t* pEntries, size_t nEntries);
 
 
 ///////////////////////////////////////////////////////////////////////////
@@ -47,6 +52,11 @@ int main(int nArgs, char** szArgs)
     }
 
     WIN_LOG("Target process found [ %s ] with pid %d", target.m_szTargetName, target.m_iTargetPID);
+
+
+    MapEntry_t* pMaps = MapParser_Parse(&target);
+    PrintMapEntries(pMaps, Vector_Len(pMaps));
+    return 0;
 
 
     // .so file to mapped object.
@@ -99,5 +109,34 @@ static void PrintDependencyTree(MappedObject_t* pObj, int iIndentation)
     {
         if(pObj->m_pDependencies[i] != 0)
             PrintDependencyTree(pObj->m_pDependencies[i], iIndentation + 1);
+    }
+}
+
+
+///////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////
+static void PrintMapEntries(MapEntry_t* vecEntries, size_t nEntries)
+{
+    for(size_t i = 0; i < nEntries; i++)
+    {
+        MapEntry_t* pEntry = &vecEntries[i];
+
+        printf("%lx-%lx ", pEntry->m_iStartAdrs, pEntry->m_iStartAdrs + pEntry->m_iSize);
+
+        printf("%c", pEntry->m_bPermRead    == true ? 'r' : '-');
+        printf("%c", pEntry->m_bPermWrite   == true ? 'w' : '-');
+        printf("%c", pEntry->m_bPermExec    == true ? 'x' : '-');
+        printf("%c", pEntry->m_bPermPrivate == true ? 'p' : '-');
+        printf(" ");
+
+        printf("%08lx ",    pEntry->m_iFileOffset);
+
+        printf("%02x:%02x ", pEntry->m_iDevMajor, pEntry->m_iDevMinor);
+
+        printf("%d ",      pEntry->m_iInode);
+
+        printf("%s",       pEntry->m_szPathName);
+        
+        printf("\n");
     }
 }

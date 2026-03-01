@@ -11,12 +11,15 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 
 SET(SOURCE
     "src/main.c"
+
     "src/TargetBrief/TargetBrief_t.c"
     "src/ShellCode/ShellCodeV2.c"
+    "src/MapParser/MapParser.c"
+    "src/MappedObject/MappedObject.c"
+
     "src/Util/Terminal/ConsoleSystem.c"
     "src/Util/AAManager/AAManager.c"
     "src/Util/Util.c"
-    "src/MappedObject/MappedObject.c"
 )
 
 add_executable(${PROJECT_NAME} ${SOURCE})
