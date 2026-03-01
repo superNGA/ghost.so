@@ -24,7 +24,6 @@
 
 
 // Globals...
-static ArenaAllocator_t* g_pArenaAlloc;
 REGISTER_ARENA_ALLOCATOR(g_pArenaAlloc);
 
 

@@ -1,6 +1,8 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <unistd.h>
+#include <errno.h>
+#include <sys/mman.h>
 
 #include "TargetBrief/TargetBrief_t.h"
 #include "MappedObject/MappedObject.h"
@@ -66,18 +68,17 @@ int main(int nArgs, char** szArgs)
 
 
     if(ShellCode_StopTargetAllThreads(&target) == false)
-    {
-        FAIL_LOG("Failed to stop target");
         return 1;
-    }
 
-    LOG("Stopped target");
+    void* pMap = ShellCode_MMap(&target, (void*)0x500000000000, 0x1000);
+    // int some = ShellCode_MnMap(&target, (void*)0x500000001000, 0x1000);
     
     if(ShellCode_StartTargetAllThreads(&target) == false)
-    {
-        FAIL_LOG("Failed to start target");
         return 1;
-    }
+
+
+    // LOG("%d", some);
+    LOG("MMaped @ %p", pMap);
 
 
     AAManager_UninitializeAll();

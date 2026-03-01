@@ -25,6 +25,7 @@ struct ArenaAllocator_t;
 
 /* Register and Initialize an ArenaAllocator_t. */
 #define REGISTER_ARENA_ALLOCATOR(Allocator)                       \
+    static ArenaAllocator_t* Allocator = ((void*)0);              \
     __attribute__((constructor))                                  \
     static void JOIN(Register, JOIN(Allocator, __COUNTER__))() {  \
         RegisterArenaAllocator(&Allocator);                       \

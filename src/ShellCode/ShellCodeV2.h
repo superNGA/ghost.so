@@ -30,7 +30,7 @@ bool ShellCode_StartTargetAllThreads(struct TargetBrief_t* pTarget);
 /* Injects shellcode in process PTARGET, executes and restores, resulting in a call to 
    mmap() with first argument as PVADDR ( preferred address for mapping )
    and second argument as ISIZE ( size of allocation ).
-   Returns mmap()'s return value. */
+   Returns mmap()'s return value, MAP_FAILED on fail. */
 void* ShellCode_MMap(struct TargetBrief_t* pTarget, void* pVAddr, size_t iSize);
 
 
