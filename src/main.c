@@ -55,8 +55,7 @@ int main(int nArgs, char** szArgs)
 
 
     MapEntry_t* pMaps = MapParser_Parse(&target);
-    PrintMapEntries(pMaps, Vector_Len(pMaps));
-    return 0;
+    // PrintMapEntries(pMaps, Vector_Len(pMaps));
 
 
     // .so file to mapped object.
@@ -72,22 +71,24 @@ int main(int nArgs, char** szArgs)
     LOG("Dependencies    @ : %p", obj.m_pDependencies);
     LOG("Load base         : %p", obj.m_iLoadBase);
 
+
+    MappedObject_LoadAll(&obj, &target);
+    return 0;
+
     
-    // Dependency tree.
-    // PrintDependencyTree(&obj, 0);
-
-
     if(ShellCode_StopTargetAllThreads(&target) == false)
         return 1;
 
-    void* pMap = ShellCode_MMap(&target, (void*)0x500000000000, 0x1000);
-    // int some = ShellCode_MnMap(&target, (void*)0x500000001000, 0x1000);
+    void* pMap = ShellCode_MMap(&target, (void*)0x558c9a002000, 0x1000, 
+            (uint32_t)(PROT_READ | PROT_EXEC), 
+            (uint32_t)(MAP_FIXED_NOREPLACE | MAP_ANONYMOUS | MAP_PRIVATE));
+    int some = ShellCode_MUnMap(&target, (void*)0x558c9a000000, 0x3000);
     
     if(ShellCode_StartTargetAllThreads(&target) == false)
         return 1;
 
 
-    // LOG("%d", some);
+    LOG("%d", some);
     LOG("MMaped @ %p", pMap);
 
 

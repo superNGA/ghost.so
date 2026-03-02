@@ -10,6 +10,7 @@
 #ifndef SHELLCODE_V2_H
 #define SHELLCODE_V2_H
 
+#include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
 
@@ -17,21 +18,20 @@ struct TargetBrief_t;
 
 
 
-/* Stop all threads of the target process PTARGET using ( PTRACE_SEIZE + PTRACE_INTERRUPT ).
-   This is a synchronous ( pretty big word init ) function. Returns false on failure. */
+/* Synchronous. Stop all threads of the target process PTARGET using
+   ( PTRACE_SEIZE + PTRACE_INTERRUPT ). Returns false on failure. */
 bool ShellCode_StopTargetAllThreads(struct TargetBrief_t* pTarget);
 
 
-/* Start / unfreeze all threads of the target process PTARGET using pTrace(PTRACE_DETACH). 
-   This is a synchronous function. Returns false on failure. */
+/* Synchronous. Start / unfreeze all threads of the target process PTARGET
+   using pTrace(PTRACE_DETACH). Returns false on failure. */
 bool ShellCode_StartTargetAllThreads(struct TargetBrief_t* pTarget);
 
 
-/* Injects shellcode in process PTARGET, executes and restores, resulting in a call to 
-   mmap() with first argument as PVADDR ( preferred address for mapping )
-   and second argument as ISIZE ( size of allocation ).
-   Returns mmap()'s return value, MAP_FAILED on fail. */
-void* ShellCode_MMap(struct TargetBrief_t* pTarget, void* pVAddr, size_t iSize);
+/* Injects shellcode in process PTARGEt, execute and restores, resulting in a call to 
+   mmap(PVADDR, ISIZE, PPROTECTION, IMAPFLAGS, -1, 0). 
+   Returns mmap() output. */
+void* ShellCode_MMap(struct TargetBrief_t* pTarget, void* pVAddr, size_t iSize, uint32_t iMapProtection, uint32_t iMapFlags);
 
 
 /* Injects shellcode in process PTARGET, executes and restores, resulting in a call to 

@@ -162,21 +162,23 @@ bool ShellCode_StartTargetAllThreads(struct TargetBrief_t* pTarget)
 
 ///////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////
-void* ShellCode_MMap(struct TargetBrief_t* pTarget, void* pVAddr, size_t iSize)
+void* ShellCode_MMap(struct TargetBrief_t* pTarget, void* pVAddr, size_t iSize, uint32_t iMapProtection, uint32_t iMapFlags)
 {
     void* pOutput = MAP_FAILED;
 
     static const size_t iAdrsByteOffset = 2;
     static const size_t iSizeByteOffset = 12;
+    static const size_t iProtByteOffset = 23;
+    static const size_t iFlagByteOffset = 30; 
     static unsigned char shellCodeTemplate[] = 
     {
         // mov rdi, [ map adrs here ] 
         0x48, 0xBF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         // mov rsi, [ map size here ]
         0x48, 0xBE, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
-        // mov rdx, 3  
+        // mov rdx, [ map protection here ] 
         0x48, 0xC7, 0xC2, 0x03, 0x00, 0x00, 0x00, 
-        // mov r10, 0x100022 ( MAP_FIXED_NOREPLACE | MAP_ANONYMOUS | MAP_PRIVATE ) 
+        // mov r10, [ map flags here ]
         0x49, 0xC7, 0xC2, 0x22, 0x00, 0x10, 0x00,
         // mov r8,  -1
         0x49, 0xC7, 0xC0, 0xFF, 0xFF, 0xFF, 0xFF,
@@ -194,13 +196,19 @@ void* ShellCode_MMap(struct TargetBrief_t* pTarget, void* pVAddr, size_t iSize)
     // Shell code is very small ( less than 64 bytes ) so its fine on the stack.
     unsigned char shellCode[sizeof(shellCodeTemplate)];
 
+
     // Modify template according to our needs.
     memcpy(shellCode, shellCodeTemplate, iShellCodeSize);
     *(uint64_t*)(shellCode + iAdrsByteOffset) = (uint64_t)pVAddr; // Should handle endian.
     *(uint64_t*)(shellCode + iSizeByteOffset) = (uint64_t)iSize;  // Should handle endian.
+    *(uint32_t*)(shellCode + iProtByteOffset) = (uint32_t)iMapProtection;
+    *(uint32_t*)(shellCode + iFlagByteOffset) = (uint32_t)iMapFlags;
 
-    LOG("Map address %p, Map size : %zu", *(uint64_t*)(shellCode + iAdrsByteOffset), *(uint64_t*)(shellCode + iSizeByteOffset));
-
+    LOG("Map Adrs : %p, Map Size : %zx, Map Prot. : %x, Map Flags : %x",
+            *(uint64_t*)(shellCode + iAdrsByteOffset),
+            *(uint64_t*)(shellCode + iSizeByteOffset),
+            *(uint32_t*)(shellCode + iProtByteOffset),
+            *(uint32_t*)(shellCode + iFlagByteOffset));
 
     return (void*)ShellCode_RemoteExec(shellCode, iShellCodeSize, pTarget->m_iTargetPID);
 }
@@ -235,7 +243,7 @@ int ShellCode_MUnMap(struct TargetBrief_t* pTarget, void* pVAddr, size_t iSize)
     *(uint64_t*)(shellCode + iAdrsByteOffset) = (uint64_t)pVAddr; // Should handle endian.
     *(uint64_t*)(shellCode + iSizeByteOffset) = (uint64_t)iSize;  // Should handle endian.
 
-    LOG("Map address %p, Map size : %zu", *(uint64_t*)(shellCode + iAdrsByteOffset), *(uint64_t*)(shellCode + iSizeByteOffset));
+    LOG("Map address %p, Map size : %zx", *(uint64_t*)(shellCode + iAdrsByteOffset), *(uint64_t*)(shellCode + iSizeByteOffset));
 
 
     return (int)ShellCode_RemoteExec(shellCode, iShellCodeSize, pTarget->m_iTargetPID);

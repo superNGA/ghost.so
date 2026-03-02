@@ -63,7 +63,7 @@ typedef enum ParserStates_t
 
 ///////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////
-struct MapEntry_t* MapParser_Parse(struct TargetBrief_t* pTarget)
+struct MapEntry_t* MapParser_Parse(struct TargetBrief_t* pTarget, MapEntry_t* vecMaps)
 {
     // construct path.
     char szPath[256];
@@ -82,9 +82,7 @@ struct MapEntry_t* MapParser_Parse(struct TargetBrief_t* pTarget)
 
     // parser's state ( dictates what to treat this token as. )
     ParserStates_t iParserState = ParserState_Address;
-
-    MapEntry_t  tempMapEntry = {0};
-    MapEntry_t* vecMaps      = nullptr;
+    MapEntry_t     tempMapEntry = {0};
 
     while((c = fgetc(pFile)) != EOF)
     {

@@ -17,6 +17,8 @@
 
 #define MAX_MAPPED_OBJECT_NAME_SIZE (128)
 
+struct TargetBrief_t;
+
 
 ///////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////
@@ -32,7 +34,7 @@ typedef struct MappedObject_t
     size_t      m_iStringTableSize;  // size of the string table in bytes.
 
     char        m_szName[MAX_MAPPED_OBJECT_NAME_SIZE]; // File's name.
-    struct MappedObject_t** m_pDependencies;                       // DT_NEEDED entries for this shared object.
+    struct MappedObject_t** m_pDependencies; // DT_NEEDED entries for this shared object.
     size_t      m_nDependencies;     // Number of dependencies.
 
 } MappedObject_t;
@@ -41,6 +43,11 @@ typedef struct MappedObject_t
 /* Load this shared object file as "struct MappedObject_t" and all of its dependencies 
    forming a tree structure. */
 bool MappedObject_Initialize(MappedObject_t* pObj, const char* szFile);
+
+
+/* Load this MappedObject_t's PT_LOAD segments along with all of its dependencies
+   into target process PTARGET's memory. */
+bool MappedObject_LoadAll(MappedObject_t* pHead, struct TargetBrief_t* pTarget);
 
 
 #endif

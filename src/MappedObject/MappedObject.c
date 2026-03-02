@@ -8,6 +8,7 @@
 //-------------------------------------------------------------------------
 #include "MappedObject.h"
 #include <stdbool.h>
+#include <sys/mman.h>
 
 #define _GNU_SOURCE
 #define __USE_GNU
@@ -17,20 +18,50 @@
 #include "../Util/Util.h"
 #include "../Util/Terminal/Terminal.h"
 
+#include "../ShellCode/ShellCodeV2.h"
+#include "../TargetBrief/TargetBrief_t.h"
+#include "../MapParser/MapParser.h"
+
 // ILIB...
 #include "../../lib/ILIB/ILIB_Vector.h"
 #include "../../lib/ILIB/ILIB_ArenaAllocator.h"
 #include "../Util/AAManager/AAManager.h"
+#include "../../lib/ILIB/ILIB_Maths.h"
+
+
+#define MAX_LOAD_BIAS_FIND_ATTEMPT (1000)
+#define DEFAULT_LOAD_BIAS          (0x500000000000)
 
 
 // Globals...
 REGISTER_ARENA_ALLOCATOR(g_pArenaAlloc);
 
 
-static bool InitMappedObject(MappedObject_t* pObj, const char* szFile);
-static bool StoreStringTable(MappedObject_t* pObj);
-static bool ResolveDependencies(MappedObject_t* pHead, MappedObject_t* pObj);
-static MappedObject_t* FindDependency(MappedObject_t* pHead, const char* szDependency);
+
+/* Store SZFILE's elf header, all program headers, entire dynamic (PT_DYNAMIC) segment and the string table (DT_STRTAB)
+   thats present in the dynamic segment in POBJ along with some other metadata about SZFILE. 
+   Returns false on failure and true on success. */
+static bool _InitMappedObject(MappedObject_t* pObj, const char* szFile);
+
+
+/* Store the string table ( DT_STRTAB ) whose address is present in the PT_DYNAMIC segment of file 
+   pObj->m_szName, into pObj->m_szStringTable along with string table size ( DT_STRSZ ).
+   Returns false on failure and true on success. */
+static bool _StoreStringTable(MappedObject_t* pObj);
+
+
+/* Find all the DT_NEEDED entries in phead and find them on disk, then run em through _InitMappedObject(), 
+   and them do it recursively on all the dependencies skipping repeating dependencies. This is a recursive function. */
+static bool _ResolveDependencies(MappedObject_t* pHead, MappedObject_t* pObj);
+
+
+/* Find MappedObject_t of file SZDEPENDENCY in PHEAD's dependency array. 
+   Return nullptr on failure. Valid MappedObject_t* on success. */
+static MappedObject_t* _FindDependency(MappedObject_t* pHead, const char* szDependency);
+
+
+/* Push back PHEAD and all of its dependencies to PVECOUT, skipping repeating dependencies. */
+static void _CollectUniqueObjects(MappedObject_t* pThisObj, MappedObject_t** pVecOut);
 
 
 
@@ -38,13 +69,13 @@ static MappedObject_t* FindDependency(MappedObject_t* pHead, const char* szDepen
 ///////////////////////////////////////////////////////////////////////////
 bool MappedObject_Initialize(MappedObject_t* pObj, const char* szFile)
 {
-    bool bParentInit = InitMappedObject(pObj, szFile);
+    bool bParentInit = _InitMappedObject(pObj, szFile);
     if(bParentInit == false)
         return false;
 
 
-    // Store all dependencies as mapped objects recusively.
-    bool bDependencyInit = ResolveDependencies(pObj, pObj);
+    // Store all dependencies as mapped objects recursively.
+    bool bDependencyInit = _ResolveDependencies(pObj, pObj);
     if(bDependencyInit == false)
     {
         FAIL_LOG("Failed to initialize dependencies");
@@ -63,7 +94,135 @@ bool MappedObject_Initialize(MappedObject_t* pObj, const char* szFile)
 
 ///////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////
-static bool InitMappedObject(MappedObject_t* pObj, const char* szFile)
+bool MappedObject_LoadAll(MappedObject_t* pHead, TargetBrief_t* pTarget)
+{
+    /*
+    
+       X. What pages are allocated.
+       What pages we need to allcoate.
+       A load biase for which all pages can be allocated.
+       Allcoate all pages.
+       Write segments to pages.
+
+    */
+    MappedObject_t** vecUnqiueObj = nullptr;
+    Vector_Reserve(vecUnqiueObj, 1);
+    _CollectUniqueObjects(pHead, vecUnqiueObj);
+
+
+    // Page size on this machine.
+    long iPageSize = sysconf(_SC_PAGESIZE);
+
+    // Vector of pages that are this process already has.
+    MapEntry_t* vecMaps = nullptr; Vector_Reserve(vecMaps, 1);
+
+    // Temp array of page ranges.
+    typedef struct PageRange_t { uintptr_t m_iPageMin, m_iPageMax; } PageRange_t;
+    PageRange_t* vecTempPageRanges = nullptr; Vector_Reserve(vecTempPageRanges, 1);
+
+
+    for(size_t iObjIndex = 0; iObjIndex < Vector_Len(vecUnqiueObj); iObjIndex++)
+    {
+        MappedObject_t* pObj = vecUnqiueObj[iObjIndex];
+
+
+        // Create an array of PageRange_t containing 
+        // min ( p_vaddr ) Rounded to PageSize toward zero and 
+        // max ( p_vaddr + p_memsz ) rounded to PageSize away from zero for
+        // all PT_LOAD segments. 
+        //
+        // Now ( vecTempPageRanger entries ) + ( load bias ) can act as "page where this segment
+        // can be loaded."
+        Vector_Clear(vecTempPageRanges);
+        for(size_t iHdrIndex = 0; iHdrIndex < pObj->m_elfHeader.e_phnum; iHdrIndex++)
+        {
+            Elf64_Phdr* pProHeader = &pObj->m_pProHeader[iHdrIndex];
+
+            if(pProHeader->p_type != PT_LOAD)
+                continue;
+
+            PageRange_t iSegmentRange = {0};
+            iSegmentRange.m_iPageMin = Maths_RoundTowardZero(pProHeader->p_vaddr,                       iPageSize);
+            iSegmentRange.m_iPageMax = Maths_Round          (pProHeader->p_vaddr + pProHeader->p_memsz, iPageSize);
+            Vector_PushBack(vecTempPageRanges, iSegmentRange);
+
+            LOG("Estimated page %lx - %lx", iSegmentRange.m_iPageMin, iSegmentRange.m_iPageMax);
+        }
+
+
+        // Already allcoated pages.
+        Vector_Clear(vecMaps);
+        MapParser_Parse(pTarget, vecMaps);
+
+
+        // Now starting from a default load bias we can work our way upward ( load bias += PageSize each iteration ) 
+        // until we find a load bias where all segments can be loaded with no conflicts.
+        uintptr_t iLoadBias = DEFAULT_LOAD_BIAS;
+        bool bLoadBiasFound = false;
+
+        for(int iAttempt = 0; iAttempt < MAX_LOAD_BIAS_FIND_ATTEMPT; iAttempt++)
+        {
+            iLoadBias += ( iAttempt * iPageSize );
+
+            bool bMapCollided = false;
+
+            for(size_t iMapIndex = 0; iMapIndex < Vector_Len(vecMaps); iMapIndex++)
+            {
+                MapEntry_t* pMapEntry = &vecMaps[iMapIndex];
+
+                // Iterate over all maps this process is also allocated and check if it overlaps with 
+                // any of our ( page range + load bias ).
+                for(size_t iSegPageIndex = 0; iSegPageIndex < Vector_Len(vecTempPageRanges); iSegPageIndex++)
+                {
+                    PageRange_t* pSegPageRange = &vecTempPageRanges[iSegPageIndex];
+
+                    bool bMinOverlapping = 
+                        pSegPageRange->m_iPageMin + iLoadBias >= pMapEntry->m_iStartAdrs && 
+                        pSegPageRange->m_iPageMin + iLoadBias <  pMapEntry->m_iStartAdrs + pMapEntry->m_iSize;
+                    bool bMaxOverlapping = 
+                        pSegPageRange->m_iPageMax + iLoadBias >= pMapEntry->m_iStartAdrs && 
+                        pSegPageRange->m_iPageMax + iLoadBias <  pMapEntry->m_iStartAdrs + pMapEntry->m_iSize;
+
+                    if(bMaxOverlapping == true || bMinOverlapping == true)
+                    {
+                        bMapCollided = true;
+                        break;
+                    }
+                }
+
+                if(bMapCollided == true)
+                    break;
+            }
+
+
+            // if we found no collisions with this load bias. we can break out.
+            if(bMapCollided == false)
+            {
+                bLoadBiasFound = true;
+                break;
+            }
+        }
+
+
+        if(bLoadBiasFound == false)
+        {
+            FAIL_LOG("Failed to find a load bias. Final load bias attempted : %p", iLoadBias);
+            exit(1);
+        }
+
+
+        // Now we have a LoadBias which we can safely use to allocate our pages / and map our segments.
+    }
+
+
+    Vector_Free(vecUnqiueObj);
+    return true;
+}
+
+
+///////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////
+static bool _InitMappedObject(MappedObject_t* pObj, const char* szFile)
 {
     assertion(sizeof(pObj->m_elfHeader) == sizeof(Elf64_Ehdr) && "Object struct is invalid");
 
@@ -112,7 +271,7 @@ static bool InitMappedObject(MappedObject_t* pObj, const char* szFile)
 
 
     // Store string table.
-    if(StoreStringTable(pObj) == false)
+    if(_StoreStringTable(pObj) == false)
         return false;
 
 
@@ -122,7 +281,7 @@ static bool InitMappedObject(MappedObject_t* pObj, const char* szFile)
 
 ///////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////
-static bool StoreStringTable(MappedObject_t* pObj)
+static bool _StoreStringTable(MappedObject_t* pObj)
 {
     Elf64_Phdr* pDymSegHdr = &pObj->m_pProHeader[pObj->m_iDynSegmentIndex];
 
@@ -184,7 +343,7 @@ static bool StoreStringTable(MappedObject_t* pObj)
 
 ///////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////
-static bool ResolveDependencies(MappedObject_t* pHead, MappedObject_t* pObj)
+static bool _ResolveDependencies(MappedObject_t* pHead, MappedObject_t* pObj)
 {
     Elf64_Phdr* pDymSegHdr  = &pObj->m_pProHeader[pObj->m_iDynSegmentIndex];
     size_t      nDynEntries = pDymSegHdr->p_filesz / sizeof(Elf64_Dyn);
@@ -253,7 +412,7 @@ static bool ResolveDependencies(MappedObject_t* pHead, MappedObject_t* pObj)
 
 
         // Check if we have already initialized this file as MappedObject_t(s).
-        MappedObject_t* pExistingObj = FindDependency(pHead, s_szFileNameBuffer);
+        MappedObject_t* pExistingObj = _FindDependency(pHead, s_szFileNameBuffer);
         if(pExistingObj != nullptr)
         {
             pObj->m_pDependencies[i] = pExistingObj;
@@ -263,7 +422,7 @@ static bool ResolveDependencies(MappedObject_t* pHead, MappedObject_t* pObj)
         {
             MappedObject_t* pUniqueDependency = ArenaAllocator_Allocate(g_pArenaAlloc, sizeof(MappedObject_t));
 
-            if(InitMappedObject(pUniqueDependency, s_szFileNameBuffer) == false)
+            if(_InitMappedObject(pUniqueDependency, s_szFileNameBuffer) == false)
             {
                 bFailed = true; break;
             }
@@ -271,7 +430,7 @@ static bool ResolveDependencies(MappedObject_t* pHead, MappedObject_t* pObj)
             pObj->m_pDependencies[i] = pUniqueDependency;
             LOG("Initialized unique dependency %s", s_szFileNameBuffer);
 
-            if(ResolveDependencies(pHead, pUniqueDependency) == false)
+            if(_ResolveDependencies(pHead, pUniqueDependency) == false)
             {
                 bFailed = true; break;
             }
@@ -286,7 +445,7 @@ static bool ResolveDependencies(MappedObject_t* pHead, MappedObject_t* pObj)
 
 ///////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////
-static MappedObject_t* FindDependency(MappedObject_t* pHead, const char* szDependency)
+static MappedObject_t* _FindDependency(MappedObject_t* pHead, const char* szDependency)
 {
     if(strncmp(szDependency, pHead->m_szName, MAX_MAPPED_OBJECT_NAME_SIZE) == 0)
         return pHead;
@@ -301,11 +460,40 @@ static MappedObject_t* FindDependency(MappedObject_t* pHead, const char* szDepen
         if(strncmp(szDependency, pDepencency->m_szName, MAX_MAPPED_OBJECT_NAME_SIZE) == 0)
             return pDepencency;
 
-        MappedObject_t* pObj = FindDependency(pDepencency, szDependency);
+        MappedObject_t* pObj = _FindDependency(pDepencency, szDependency);
 
         if(pObj != nullptr)
             return pObj;
     }
 
     return nullptr;
+}
+
+
+///////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////
+static void _CollectUniqueObjects(MappedObject_t* pThisObj, MappedObject_t** pVecOut)
+{
+    // Is this object already pushed? 
+    bool bRepeating = false;
+    for(int i = 0; i < Vector_Len(pVecOut); i++)
+    {
+        if(pVecOut[i] == pThisObj)
+        {
+            bRepeating = true;
+            break;
+        }
+    }
+    
+
+    // If not pushed already push it back.
+    if(bRepeating == false)
+        Vector_PushBack(pVecOut, pThisObj);
+
+
+    // Recurse on dependencies.
+    for(int i = 0; i < pThisObj->m_nDependencies; i++)
+    {
+        _CollectUniqueObjects(pThisObj->m_pDependencies[i], pVecOut);
+    }
 }
