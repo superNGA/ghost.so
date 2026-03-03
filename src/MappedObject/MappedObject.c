@@ -82,9 +82,13 @@ static void _GenerateObjMaps(MapRange_t* vecObjMaps, MappedObject_t* pObj);
 
 
 /* Find a memory address in virtual memory space of target, such that all maps in VECOBJMAPS 
-   can be allocated without collision. */
-static uintptr_t _FindLoadBias(MapRange_t* vecObjMaps, MapEntry_t* vecTargetMaps);
+   can be allocated without collision. Returns 0 on failure. */
+static uintptr_t _FindLoadBias(uintptr_t iDefaultLoadBias, size_t iMaxAttempt, MapRange_t* vecObjMaps, MapEntry_t* vecTargetMaps);
 
+
+/* Allocate all maps in VECOBJMAPS using shellcode and write "owner" segments
+   to allocated space. */
+static void _WriteObjToMemory(MappedObject_t* pObj, MapRange_t* vecObjMaps, TargetBrief_t* pTarget);
 
 
 
@@ -119,126 +123,47 @@ bool MappedObject_Initialize(MappedObject_t* pObj, const char* szFile)
 ///////////////////////////////////////////////////////////////////////////
 bool MappedObject_LoadAll(MappedObject_t* pHead, TargetBrief_t* pTarget)
 {
-    /*
-    
-       X. What pages are allocated.
-       What pages we need to allcoate.
-       A load biase for which all pages can be allocated.
-       Allcoate all pages.
-       Write segments to pages.
-
-    */
-    MappedObject_t** vecUnqiueObj = nullptr;
-    Vector_Reserve(vecUnqiueObj, 1);
-    _CollectUniqueObjects(pHead, vecUnqiueObj);
-
-
-    // Page size on this machine.
+    // Page size.
     long iPageSize = sysconf(_SC_PAGESIZE);
-
-    // Vector of pages that are this process already has.
-    MapEntry_t* vecMaps = nullptr; Vector_Reserve(vecMaps, 1);
-
-    // Temp array of page ranges.
-    typedef struct PageRange_t { uintptr_t m_iPageMin, m_iPageMax; } PageRange_t;
-    PageRange_t* vecTempPageRanges = nullptr; Vector_Reserve(vecTempPageRanges, 1);
+                                            
+    // Stop target.
+    ShellCode_StopTargetAllThreads(pTarget);
 
 
-    for(size_t iObjIndex = 0; iObjIndex < Vector_Len(vecUnqiueObj); iObjIndex++)
+    // pHead + dependencies ( skip repetition. )
+    MappedObject_t** vecUniqueObj = nullptr; Vector_Reserve(vecUniqueObj, 1);
+    _CollectUniqueObjects(pHead, vecUniqueObj);
+
+    // Obj Maps. ( to load )
+    MapRange_t* vecObjMaps = nullptr; Vector_Reserve(vecObjMaps, 1);
+
+    // Target Maps. ( already loaded. )
+    MapEntry_t* vecTargetMaps = nullptr; Vector_Reserve(vecTargetMaps, 1);
+
+
+    // for all obj, Generate map -> Find Load Bias -> Load -> Write.
+    for(size_t iObjIndex = 0; iObjIndex < Vector_Len(vecUniqueObj); iObjIndex++)
     {
-        MappedObject_t* pObj = vecUnqiueObj[iObjIndex];
+        MappedObject_t* pObj = vecUniqueObj[iObjIndex];
 
+        Vector_Clear(vecObjMaps); _GenerateObjMaps(vecObjMaps, pObj);
+        Vector_Clear(vecTargetMaps); MapParser_Parse(pTarget, vecTargetMaps);
 
-        // Create an array of PageRange_t containing 
-        // min ( p_vaddr ) Rounded to PageSize toward zero and 
-        // max ( p_vaddr + p_memsz ) rounded to PageSize away from zero for
-        // all PT_LOAD segments. 
-        //
-        // Now ( vecTempPageRanger entries ) + ( load bias ) can act as "page where this segment
-        // can be loaded."
-        Vector_Clear(vecTempPageRanges);
-        for(size_t iHdrIndex = 0; iHdrIndex < pObj->m_elfHeader.e_phnum; iHdrIndex++)
+        pObj->m_iLoadBase = _FindLoadBias(DEFAULT_LOAD_BIAS, MAX_LOAD_BIAS_FIND_ATTEMPT, vecObjMaps, vecTargetMaps);
+        if(pObj->m_iLoadBase == 0)
         {
-            Elf64_Phdr* pProHeader = &pObj->m_pProHeader[iHdrIndex];
-
-            if(pProHeader->p_type != PT_LOAD)
-                continue;
-
-            PageRange_t iSegmentRange = {0};
-            iSegmentRange.m_iPageMin = Maths_RoundTowardZero(pProHeader->p_vaddr,                       iPageSize);
-            iSegmentRange.m_iPageMax = Maths_Round          (pProHeader->p_vaddr + pProHeader->p_memsz, iPageSize);
-            Vector_PushBack(vecTempPageRanges, iSegmentRange);
-
-            LOG("Estimated page %lx - %lx", iSegmentRange.m_iPageMin, iSegmentRange.m_iPageMax);
-        }
-
-
-        // Already allcoated pages.
-        Vector_Clear(vecMaps);
-        MapParser_Parse(pTarget, vecMaps);
-
-
-        // Now starting from a default load bias we can work our way upward ( load bias += PageSize each iteration ) 
-        // until we find a load bias where all segments can be loaded with no conflicts.
-        uintptr_t iLoadBias = DEFAULT_LOAD_BIAS;
-        bool bLoadBiasFound = false;
-
-        for(int iAttempt = 0; iAttempt < MAX_LOAD_BIAS_FIND_ATTEMPT; iAttempt++)
-        {
-            iLoadBias += ( iAttempt * iPageSize );
-
-            bool bMapCollided = false;
-
-            for(size_t iMapIndex = 0; iMapIndex < Vector_Len(vecMaps); iMapIndex++)
-            {
-                MapEntry_t* pMapEntry = &vecMaps[iMapIndex];
-
-                // Iterate over all maps this process is also allocated and check if it overlaps with 
-                // any of our ( page range + load bias ).
-                for(size_t iSegPageIndex = 0; iSegPageIndex < Vector_Len(vecTempPageRanges); iSegPageIndex++)
-                {
-                    PageRange_t* pSegPageRange = &vecTempPageRanges[iSegPageIndex];
-
-                    bool bMinOverlapping = 
-                        pSegPageRange->m_iPageMin + iLoadBias >= pMapEntry->m_iStartAdrs && 
-                        pSegPageRange->m_iPageMin + iLoadBias <  pMapEntry->m_iStartAdrs + pMapEntry->m_iSize;
-                    bool bMaxOverlapping = 
-                        pSegPageRange->m_iPageMax + iLoadBias >= pMapEntry->m_iStartAdrs && 
-                        pSegPageRange->m_iPageMax + iLoadBias <  pMapEntry->m_iStartAdrs + pMapEntry->m_iSize;
-
-                    if(bMaxOverlapping == true || bMinOverlapping == true)
-                    {
-                        bMapCollided = true;
-                        break;
-                    }
-                }
-
-                if(bMapCollided == true)
-                    break;
-            }
-
-
-            // if we found no collisions with this load bias. we can break out.
-            if(bMapCollided == false)
-            {
-                bLoadBiasFound = true;
-                break;
-            }
-        }
-
-
-        if(bLoadBiasFound == false)
-        {
-            FAIL_LOG("Failed to find a load bias. Final load bias attempted : %p", iLoadBias);
+            FAIL_LOG("Failed to find load bias");
             exit(1);
         }
 
-
-        // Now we have a LoadBias which we can safely use to allocate our pages / and map our segments.
+        _WriteObjToMemory(pObj, vecObjMaps, pTarget);
+        WIN_LOG("Mapped %s", pObj->m_szName);
     }
 
 
-    Vector_Free(vecUnqiueObj);
+    // Start target.
+    ShellCode_StartTargetAllThreads(pTarget);
+    Vector_Free(vecUniqueObj);
     return true;
 }
 
@@ -540,6 +465,7 @@ static void _GenerateObjMaps(MapRange_t* vecObjMaps, MappedObject_t* pObj)
         MapRange_t mapRange = {0};
         mapRange.m_iMapMin = Maths_RoundTowardZero(pProHeader->p_vaddr,                       iPageSize);
         mapRange.m_iMapMax = Maths_Round          (pProHeader->p_vaddr + pProHeader->p_memsz, iPageSize);
+        mapRange.m_pOwnerSegmentHdr = pProHeader;
         Vector_PushBack(vecObjMaps, mapRange);
     }
 }
@@ -547,7 +473,69 @@ static void _GenerateObjMaps(MapRange_t* vecObjMaps, MappedObject_t* pObj)
 
 ///////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////
-static uintptr_t _FindLoadBias(MapRange_t* vecObjMaps, MapEntry_t* vecTargetMaps)
+static uintptr_t _FindLoadBias(uintptr_t iDefaultLoadBias, size_t iMaxAttempt, MapRange_t* vecObjMaps, MapEntry_t* vecTargetMaps)
 {
+    uintptr_t iLoadBias = iDefaultLoadBias;
+    uintptr_t iPageSize = (uintptr_t)sysconf(_SC_PAGESIZE);
 
+    for(int iAttempt = 0; iAttempt < iMaxAttempt; iAttempt++)
+    {
+        iLoadBias += ( iAttempt * iPageSize );
+
+        bool bMapCollided = false;
+
+        for(size_t iMapIndex = 0; iMapIndex < Vector_Len(vecTargetMaps); iMapIndex++)
+        {
+            MapEntry_t* pMapEntry = &vecTargetMaps[iMapIndex];
+
+            // Iterate over all maps this process is also allocated and check if it overlaps with 
+            // any of our ( page range + load bias ).
+            for(size_t iSegPageIndex = 0; iSegPageIndex < Vector_Len(vecObjMaps); iSegPageIndex++)
+            {
+                MapRange_t* pSegPageRange = &vecObjMaps[iSegPageIndex];
+
+                bool bMinOverlapping = 
+                    pSegPageRange->m_iMapMin + iLoadBias >= pMapEntry->m_iStartAdrs && 
+                    pSegPageRange->m_iMapMin + iLoadBias <  pMapEntry->m_iStartAdrs + pMapEntry->m_iSize;
+                bool bMaxOverlapping = 
+                    pSegPageRange->m_iMapMax + iLoadBias >= pMapEntry->m_iStartAdrs && 
+                    pSegPageRange->m_iMapMax + iLoadBias <  pMapEntry->m_iStartAdrs + pMapEntry->m_iSize;
+
+                if(bMaxOverlapping == true || bMinOverlapping == true)
+                {
+                    bMapCollided = true;
+                    break;
+                }
+            }
+
+            if(bMapCollided == true)
+                break;
+        }
+
+
+        // if we found no collisions with this load bias. we can break out.
+        if(bMapCollided == false)
+            return iLoadBias;
+    }
+
+    return 0;
+}
+
+
+///////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////
+static void _WriteObjToMemory(MappedObject_t* pObj, MapRange_t* vecObjMaps, TargetBrief_t* pTarget)
+{
+    for(size_t i = 0; i < Vector_Len(vecObjMaps); i++)
+    {
+        MapRange_t* pObjMap = &vecObjMaps[i];
+
+        ShellCode_MMap(pTarget, 
+                (void*)(pObj->m_iLoadBase + pObjMap->m_iMapMin),    // Map address. 
+                pObjMap->m_iMapMax - pObjMap->m_iMapMin,            // Map size.
+                pObjMap->m_pOwnerSegmentHdr->p_flags,               // Map protection.
+                MAP_FIXED_NOREPLACE | MAP_ANONYMOUS | MAP_PRIVATE); // Map Flags.
+
+        LOG("Mapped Segment %zu / %zu", i + 1, Vector_Len(vecObjMaps));
+    }
 }

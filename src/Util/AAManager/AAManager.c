@@ -22,7 +22,7 @@ static size_t           g_nAllocators = 0;
 void RegisterArenaAllocator(struct ArenaAllocator_t** pAllocator)
 {
     // Too many arenas?
-    if(g_nAllocators < 0 || g_nAllocators > MAX_REGISTERED_ARENA_ALLOCATOR)
+    if(g_nAllocators < 0 || g_nAllocators >= MAX_REGISTERED_ARENA_ALLOCATOR)
     {
         FAIL_LOG("Programmer error");
         FAIL_LOG("Couldn't create arena allocator index : %d, MAX_REGISTERED_ARENA_ALLOCATOR : %d", 

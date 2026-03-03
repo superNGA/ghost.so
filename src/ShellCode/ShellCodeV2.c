@@ -204,11 +204,13 @@ void* ShellCode_MMap(struct TargetBrief_t* pTarget, void* pVAddr, size_t iSize, 
     *(uint32_t*)(shellCode + iProtByteOffset) = (uint32_t)iMapProtection;
     *(uint32_t*)(shellCode + iFlagByteOffset) = (uint32_t)iMapFlags;
 
+    /*
     LOG("Map Adrs : %p, Map Size : %zx, Map Prot. : %x, Map Flags : %x",
             *(uint64_t*)(shellCode + iAdrsByteOffset),
             *(uint64_t*)(shellCode + iSizeByteOffset),
             *(uint32_t*)(shellCode + iProtByteOffset),
             *(uint32_t*)(shellCode + iFlagByteOffset));
+    */
 
     return (void*)ShellCode_RemoteExec(shellCode, iShellCodeSize, pTarget->m_iTargetPID);
 }
@@ -490,6 +492,5 @@ static uint64_t ShellCode_RemoteExec(unsigned char* shellCode, size_t iShellCode
     }
 
 
-    WIN_LOG("Done Shellcode Exec");
     return pOutput;
 }
