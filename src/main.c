@@ -54,8 +54,8 @@ int main(int nArgs, char** szArgs)
     WIN_LOG("Target process found [ %s ] with pid %d", target.m_szTargetName, target.m_iTargetPID);
 
 
-    MapEntry_t* pMaps = MapParser_Parse(&target);
-    // PrintMapEntries(pMaps, Vector_Len(pMaps));
+    MapEntry_t* vecTargetMaps = nullptr; Vector_Reserve(vecTargetMaps, 1); 
+    MapParser_Parse(&target, vecTargetMaps);
 
 
     // .so file to mapped object.

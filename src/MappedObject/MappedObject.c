@@ -38,6 +38,19 @@ REGISTER_ARENA_ALLOCATOR(g_pArenaAlloc);
 
 
 
+///////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////
+typedef struct MapRange_t
+{
+    uintptr_t m_iMapMin; // Min ( start ) address of map.
+    uintptr_t m_iMapMax; // Max ( end )   address of map.
+
+    Elf64_Phdr* m_pOwnerSegmentHdr; // Pointer to program header of the segment which is mapped @ this map.
+
+} MapRange_t;
+
+
+
 /* Store SZFILE's elf header, all program headers, entire dynamic (PT_DYNAMIC) segment and the string table (DT_STRTAB)
    thats present in the dynamic segment in POBJ along with some other metadata about SZFILE. 
    Returns false on failure and true on success. */
@@ -62,6 +75,16 @@ static MappedObject_t* _FindDependency(MappedObject_t* pHead, const char* szDepe
 
 /* Push back PHEAD and all of its dependencies to PVECOUT, skipping repeating dependencies. */
 static void _CollectUniqueObjects(MappedObject_t* pThisObj, MappedObject_t** pVecOut);
+
+
+/* Generate page aligned map ranges for all PT_LOAD segments of MappedObject_t POBJ. */
+static void _GenerateObjMaps(MapRange_t* vecObjMaps, MappedObject_t* pObj);
+
+
+/* Find a memory address in virtual memory space of target, such that all maps in VECOBJMAPS 
+   can be allocated without collision. */
+static uintptr_t _FindLoadBias(MapRange_t* vecObjMaps, MapEntry_t* vecTargetMaps);
+
 
 
 
@@ -496,4 +519,35 @@ static void _CollectUniqueObjects(MappedObject_t* pThisObj, MappedObject_t** pVe
     {
         _CollectUniqueObjects(pThisObj->m_pDependencies[i], pVecOut);
     }
+}
+
+
+///////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////
+static void _GenerateObjMaps(MapRange_t* vecObjMaps, MappedObject_t* pObj)
+{
+    Vector_Clear(vecObjMaps);
+
+    long iPageSize = sysconf(_SC_PAGESIZE);
+
+    for(size_t i = 0; i < pObj->m_elfHeader.e_phnum; i++)
+    {
+        Elf64_Phdr* pProHeader = &pObj->m_pProHeader[i];
+
+        if(pProHeader->p_type != PT_LOAD)
+            continue;
+
+        MapRange_t mapRange = {0};
+        mapRange.m_iMapMin = Maths_RoundTowardZero(pProHeader->p_vaddr,                       iPageSize);
+        mapRange.m_iMapMax = Maths_Round          (pProHeader->p_vaddr + pProHeader->p_memsz, iPageSize);
+        Vector_PushBack(vecObjMaps, mapRange);
+    }
+}
+
+
+///////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////
+static uintptr_t _FindLoadBias(MapRange_t* vecObjMaps, MapEntry_t* vecTargetMaps)
+{
+
 }
