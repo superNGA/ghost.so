@@ -63,7 +63,7 @@ typedef enum ParserStates_t
 
 ///////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////
-struct MapEntry_t* MapParser_Parse(struct TargetBrief_t* pTarget, MapEntry_t* vecMaps)
+void MapParser_Parse(struct TargetBrief_t* pTarget, MapEntry_t** vecMaps)
 {
     // construct path.
     char szPath[256];
@@ -72,10 +72,10 @@ struct MapEntry_t* MapParser_Parse(struct TargetBrief_t* pTarget, MapEntry_t* ve
     // open /proc/<pid>/maps file.
     FILE* pFile = fopen(szPath, "r");
     if(pFile == nullptr)
-        return nullptr;
+        return;
 
 
-    // A ILIB vector of type char can work a little bit like a std::string.
+    // A ILIB vector of type char can work a little bit like std::string.
     char* tempString = nullptr; Vector_Reserve(tempString, 10); Vector_Clear(tempString);
     fseek(pFile, 0, SEEK_SET);
     char c = EOF;
@@ -84,6 +84,7 @@ struct MapEntry_t* MapParser_Parse(struct TargetBrief_t* pTarget, MapEntry_t* ve
     ParserStates_t iParserState = ParserState_Address;
     MapEntry_t     tempMapEntry = {0};
 
+    Vector_Clear(*vecMaps);
     while((c = fgetc(pFile)) != EOF)
     {
         // This makes sure that no token will be captured which starts with ' ' ( space ).
@@ -96,7 +97,7 @@ struct MapEntry_t* MapParser_Parse(struct TargetBrief_t* pTarget, MapEntry_t* ve
         {
             // Null-terminate this string.
             Vector_PushBack(tempString, 0);
-
+            
             switch (iParserState) 
             {
                 case ParserState_Address:     _HandleAddress    (tempString, &tempMapEntry); break;
@@ -121,7 +122,7 @@ struct MapEntry_t* MapParser_Parse(struct TargetBrief_t* pTarget, MapEntry_t* ve
         {
             Vector_PushBack(tempString, 0);
             _HandleFilePath(tempString, &tempMapEntry);
-            Vector_PushBack(vecMaps, tempMapEntry);
+            Vector_PushBack(*vecMaps, tempMapEntry);
 
             iParserState = ParserState_Address;
             Vector_Clear(tempString);
@@ -136,7 +137,6 @@ struct MapEntry_t* MapParser_Parse(struct TargetBrief_t* pTarget, MapEntry_t* ve
     // close file and leave.
     Vector_Free(tempString);
     fclose(pFile);
-    return vecMaps;
 }
 
 
@@ -186,7 +186,7 @@ static void _HandleAddress(const char* szToken, MapEntry_t* pMapEntry)
 
     uint64_t iEndAdrs = _HexStringToInt(szToken);
 
-    assertion(iEndAdrs > pMapEntry->m_iStartAdrs && "Invalid token.");
+    assertion(iEndAdrs > pMapEntry->m_iStartAdrs && pMapEntry->m_iStartAdrs != 0 && iEndAdrs != 0 && "Invalid token.");
 
     pMapEntry->m_iSize = iEndAdrs - pMapEntry->m_iStartAdrs;
 }

@@ -19,6 +19,7 @@
 #include <sys/user.h>
 
 #include "../TargetBrief/TargetBrief_t.h"
+#include "PTraceHelper.h"
 
 // Util...
 #include "../Util/AAManager/AAManager.h"
@@ -40,13 +41,6 @@ REGISTER_ARENA_ALLOCATOR(g_pArenaAlloc);
    and pushes them in PVECTHREADS which is expected to be ILIB_VECTOR. */
 static bool ShellCode_GetAllThreads(pid_t iTargetPID, pid_t* pVecThreads);
 
-/* Read NBYTES from virtual address PADDRESS of target process ITHREADID into buffer PBYTES 
-   using ptrace(PTRACE_PEEKDATA) */
-static bool ShellCode_ReadBytesPTrace(unsigned char* pBytes, size_t nBytes, void* pAddress, pid_t iThreadID);
-
-/* Write NBYTES at virtual address PADDRESS of target process ITHREADID from buffer PBYTES 
-   using ptrace(PTRACE_POKEDATA) */
-static bool ShellCode_WriteBytesPTrace(unsigned char* pBytes, size_t nBytes, void* pAddress, pid_t iThreadID);
 
 /* Inject, Execute and Restore shellcode into target process ITHREADID. 
    Returns -1 on fail, and rAX register's value at shellcode exec end on success. */
@@ -290,101 +284,6 @@ static bool ShellCode_GetAllThreads(pid_t iTargetPID, pid_t* pVecThreads)
 
 ///////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////
-static bool ShellCode_ReadBytesPTrace(unsigned char* pBytes, size_t nBytes, void* pAddress, pid_t iThreadID)
-{
-    if(nBytes == 0)
-        return false;
-
-
-    size_t nIterations = ((nBytes - 1) / sizeof(long)) + 1;
-    for(size_t i = 0; i < nIterations; i++)
-    {
-        errno = 0;
-
-        const uintptr_t iAddress = (uintptr_t)pAddress + (i * sizeof(long));
-        const long      iData    = ptrace(PTRACE_PEEKDATA, iThreadID, iAddress, NULL);
-
-        // did ptrace(PEEKDATA) failed?
-        if(iData == -1 && errno != 0)
-            return false;
-
-        for(int j = 0; j < sizeof(long); j++)
-        {
-            const unsigned char* szBytes   = (const unsigned char*)&iData;
-            const int            iAbsIndex = (i * sizeof(long)) + j;
-
-            if(iAbsIndex >= nBytes)
-                break;
-
-            pBytes[iAbsIndex] = szBytes[j];
-        }
-    }
-
-
-    return true;
-}
-
-
-///////////////////////////////////////////////////////////////////////////
-///////////////////////////////////////////////////////////////////////////
-static bool ShellCode_WriteBytesPTrace(unsigned char* pBytes, size_t nBytes, void* pAddress, pid_t iThreadID)
-{
-    if(nBytes == 0)
-        return false;
-
-
-    size_t nIterations = ((nBytes - 1) / sizeof(long)) + 1;
-    for(size_t i = 0; i < nIterations; i++)
-    {
-        long            iData    = 0;
-        unsigned char*  szBytes  = (unsigned char*)&iData;
-        const uintptr_t iAddress = (uintptr_t)pAddress + (i * sizeof(long));
-
-        // NOTE : Since ptarce(pokedata) writes 8 bytes at a time ( sizeof(long) )
-        //      we can write in all iterations ( 8 bytes ) correctly except for the last 
-        //      iterations ( where we have nBytes % sizeof(long) bytes ). In that case we have
-        //      to first read the original bytes at that location and modifying some bytes
-        //      and keep the remaning intact, and write it back.
-        if(i < nIterations - 1)
-        {
-            for(int j = 0; j < sizeof(long); j++)
-            {
-                int iAbsIndex = (i * sizeof(long)) + j;
-                szBytes[j]    = pBytes[iAbsIndex];
-            }
-        }
-        else
-        {
-            errno = 0;
-            iData = ptrace(PTRACE_PEEKDATA, iThreadID, iAddress, NULL);
-
-            if(iData == -1 && errno != 0) // peekdata failed?
-                return false;
-
-            for(int j = 0; j < sizeof(long); j++)
-            {
-                const int iAbsIndex = (i * sizeof(long)) + j;
-
-                if(iAbsIndex >= nBytes)
-                    break;
-
-                szBytes[j] = pBytes[iAbsIndex];
-            }
-        }
-
-        errno         = 0;
-        long iErrCode = ptrace(PTRACE_POKEDATA, iThreadID, iAddress, iData);
-        if(iErrCode == -1 && errno != 0) // pokedata failed ?
-            return false;
-    }
-
-
-    return true;
-}
-
-
-///////////////////////////////////////////////////////////////////////////
-///////////////////////////////////////////////////////////////////////////
 static uint64_t ShellCode_RemoteExec(unsigned char* shellCode, size_t iShellCodeSize, pid_t iThreadID)
 {
     uint64_t pOutput = ((uint64_t)-1);
@@ -440,12 +339,12 @@ static uint64_t ShellCode_RemoteExec(unsigned char* shellCode, size_t iShellCode
 
 
     // Back up original bytes @ RIP.
-    ShellCode_ReadBytesPTrace(pOrignalCode, iShellCodeSize, (void*)regs.rip, iTargetThread);
+    PTraceHelper_ReadBytes(pOrignalCode, iShellCodeSize, (void*)regs.rip, iTargetThread);
 
 
     // Write shellcode @ RIP.
-    ShellCode_WriteBytesPTrace(shellCode,   iShellCodeSize, (void*)regs.rip, iTargetThread);
-    ShellCode_ReadBytesPTrace (pTempBuffer, iShellCodeSize, (void*)regs.rip, iTargetThread);
+    PTraceHelper_WriteBytes(shellCode,   iShellCodeSize, (void*)regs.rip, iTargetThread);
+    PTraceHelper_ReadBytes (pTempBuffer, iShellCodeSize, (void*)regs.rip, iTargetThread);
     if(memcmp(shellCode, pTempBuffer, iShellCodeSize) != 0)
     {
         FAIL_LOG("Failed to write shellcode @ rip %p", (void*)regs.rip);
@@ -473,8 +372,8 @@ static uint64_t ShellCode_RemoteExec(unsigned char* shellCode, size_t iShellCode
 
 
     // Restore opbytes.
-    ShellCode_WriteBytesPTrace(pOrignalCode, iShellCodeSize, (void*)regs.rip, iTargetThread);
-    ShellCode_ReadBytesPTrace (pTempBuffer,  iShellCodeSize, (void*)regs.rip, iTargetThread);
+    PTraceHelper_WriteBytes(pOrignalCode, iShellCodeSize, (void*)regs.rip, iTargetThread);
+    PTraceHelper_ReadBytes (pTempBuffer,  iShellCodeSize, (void*)regs.rip, iTargetThread);
     if(memcmp(pOrignalCode, pTempBuffer, iShellCodeSize) != 0)
     {
         FAIL_LOG("Failed to restore bytes after shellcode @ rip %p", (void*)regs.rip);

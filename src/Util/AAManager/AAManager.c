@@ -15,6 +15,9 @@
 static ArenaAllocator_t g_vecAllocators[MAX_REGISTERED_ARENA_ALLOCATOR];
 static size_t           g_nAllocators = 0;
 
+static Arena_t          g_vecArenas[MAX_REGISTERED_ARENA];
+static size_t           g_nArena = 0;
+
 
 
 ///////////////////////////////////////////////////////////////////////////
@@ -43,6 +46,35 @@ void RegisterArenaAllocator(struct ArenaAllocator_t** pAllocator)
 
     *pAllocator = &g_vecAllocators[g_nAllocators];
     g_nAllocators++;
+}
+
+
+///////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////
+void RegisterArena(struct Arena_t** pArena, size_t iArenaSize)
+{
+    // Invalid arena counter.
+    if(g_nArena < 0 || g_nArena >= MAX_REGISTERED_ARENA)
+    {
+        FAIL_LOG("Programmer error");
+        FAIL_LOG("Couldn't create arena index : %d, MAX_REGISTERED_ARENA : %d", 
+                g_nArena, MAX_REGISTERED_ARENA);
+
+        exit(1);
+    }
+
+
+    // Initialize arena
+    if(Arena_Initialize(&g_vecArenas[g_nArena], 0) == false)
+    {
+        FAIL_LOG("Failed to initialize arena at index %zu", g_nArena);
+        
+        exit(1);
+    }
+
+
+    *pArena = &g_vecArenas[g_nArena];
+    g_nArena++;
 }
 
 

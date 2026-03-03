@@ -28,7 +28,7 @@ TODO: Construct a clean and absolute mmap free solution.
 */
 
 static void PrintDependencyTree(MappedObject_t* pObj, int iIndentation);
-static void PrintMapEntries(MapEntry_t* pEntries, size_t nEntries);
+void PrintMapEntries(const MapEntry_t* pEntries, size_t nEntries);
 
 
 ///////////////////////////////////////////////////////////////////////////
@@ -54,8 +54,7 @@ int main(int nArgs, char** szArgs)
     WIN_LOG("Target process found [ %s ] with pid %d", target.m_szTargetName, target.m_iTargetPID);
 
 
-    MapEntry_t* vecTargetMaps = nullptr; Vector_Reserve(vecTargetMaps, 1); 
-    MapParser_Parse(&target, vecTargetMaps);
+    MapEntry_t* vecTargetMaps = nullptr; MapParser_Parse(&target, &vecTargetMaps);
 
 
     // .so file to mapped object.
@@ -116,11 +115,11 @@ static void PrintDependencyTree(MappedObject_t* pObj, int iIndentation)
 
 ///////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////
-static void PrintMapEntries(MapEntry_t* vecEntries, size_t nEntries)
+void PrintMapEntries(const MapEntry_t* vecEntries, size_t nEntries)
 {
     for(size_t i = 0; i < nEntries; i++)
     {
-        MapEntry_t* pEntry = &vecEntries[i];
+        const MapEntry_t* pEntry = &vecEntries[i];
 
         printf("%lx-%lx ", pEntry->m_iStartAdrs, pEntry->m_iStartAdrs + pEntry->m_iSize);
 

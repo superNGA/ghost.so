@@ -45,7 +45,7 @@ typedef struct MapEntry_t
 
 /* Synchronous. Parse /proc/<procID>/maps file for target process PTARGET and 
    fill in the VECMAPS array ( must be initialized ). */
-struct MapEntry_t* MapParser_Parse(struct TargetBrief_t* pTarget, MapEntry_t* vecMaps);
+void MapParser_Parse(struct TargetBrief_t* pTarget, MapEntry_t** vecMaps);
 
 
 #endif

@@ -14,6 +14,7 @@ SET(SOURCE
 
     "src/TargetBrief/TargetBrief_t.c"
     "src/ShellCode/ShellCodeV2.c"
+    "src/ShellCode/PTraceHelper.c"
     "src/MapParser/MapParser.c"
     "src/MappedObject/MappedObject.c"
 
