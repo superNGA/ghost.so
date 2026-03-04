@@ -89,6 +89,9 @@ int main(int nArgs, char** szArgs)
 
         goto EXIT;
     }
+
+
+    MappedObject_VerifyLoadedObj(&obj, &target);
     
 
 EXIT:

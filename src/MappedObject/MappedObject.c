@@ -39,6 +39,7 @@
 
 // Globals...
 REGISTER_ARENA_ALLOCATOR(g_pArenaAlloc);
+REGISTER_ARENA(g_pArena, 1024);
 
 
 
@@ -96,6 +97,14 @@ static uintptr_t _FindLoadBias(uintptr_t iDefaultLoadBias, size_t iMaxAttempt, c
 static bool _WriteObjToMemory(MappedObject_t* pObj, const MapRange_t* vecObjMaps, TargetBrief_t* pTarget);
 
 
+/* Generate SHA-256 hash for NBYTES from file SZFILE at IOFFSET. */
+static bool _GenerateSHA256File(const char* szFile, size_t nBytes, size_t iOffset, BYTE* pHashOut);
+
+
+/* Generate SHA-256 hash for NBYTES from virtual address PVADRS of process PTARGET. */
+static bool _GenerateSHA256PTrace(TargetBrief_t* pTarget, size_t nBytes, void* pVAdrs, BYTE* pHashOut);
+
+
 
 ///////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////
@@ -128,6 +137,8 @@ bool MappedObject_Initialize(MappedObject_t* pObj, const char* szFile)
 ///////////////////////////////////////////////////////////////////////////
 bool MappedObject_LoadAll(MappedObject_t* pHead, TargetBrief_t* pTarget)
 {
+    bool bOk = true;
+
     // Page size.
     long iPageSize = sysconf(_SC_PAGESIZE);
 
@@ -138,10 +149,6 @@ bool MappedObject_LoadAll(MappedObject_t* pHead, TargetBrief_t* pTarget)
 
     MapRange_t* vecObjMaps    = nullptr; // Obj Maps. ( to load )
     MapEntry_t* vecTargetMaps = nullptr; // Target Maps. ( already loaded. )
-
-
-    // we return this. true -> success. false -> failure.
-    bool bFailed = true;
 
 
     // for all obj, Generate map -> Find Load Bias -> Load -> Write.
@@ -163,7 +170,7 @@ bool MappedObject_LoadAll(MappedObject_t* pHead, TargetBrief_t* pTarget)
         if(pObj->m_iLoadBase == 0)
         {
             FAIL_LOG("Failed to find load bias");
-            bFailed = true;
+            bOk = false;
             break;
         }
 
@@ -172,7 +179,7 @@ bool MappedObject_LoadAll(MappedObject_t* pHead, TargetBrief_t* pTarget)
         if(_WriteObjToMemory(pObj, vecObjMaps, pTarget) == false)
         {
             FAIL_LOG("Failed to write object for object : %s", pObj->m_szName);
-            bFailed = true;
+            bOk = false;
             break;
         }
 
@@ -184,7 +191,7 @@ bool MappedObject_LoadAll(MappedObject_t* pHead, TargetBrief_t* pTarget)
     Vector_Free(vecUniqueObj );
     Vector_Free(vecTargetMaps);
     Vector_Free(vecObjMaps   );
-    return bFailed;
+    return bOk;
 }
 
 
@@ -258,6 +265,85 @@ bool MappedObject_RestoreTo(const struct MapEntry_t* pRestoreTo, struct TargetBr
 
     Vector_Free(vecNewMaps);
     return true;
+}
+
+
+///////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////
+bool MappedObject_VerifyLoadedObj(MappedObject_t* pHead, struct TargetBrief_t* pTarget)
+{
+    // pHead + Dependencies ( skip repeating dependencies )
+    MappedObject_t** vecUniqueObj = nullptr; _CollectUniqueObjects(pHead, &vecUniqueObj);
+
+    BYTE hashFile  [SHA256_BLOCK_SIZE] = {0};
+    BYTE hashTarget[SHA256_BLOCK_SIZE] = {0};
+
+    bool bOk = true;
+
+    for(size_t iObjIndex = 0; iObjIndex < Vector_Len(vecUniqueObj); iObjIndex++)
+    {
+        const MappedObject_t* pObj = vecUniqueObj[iObjIndex];
+        // invalid load base -> not initialized.
+        assertion(pObj->m_iLoadBase != 0 && "Load base is 0. This MappedObject_t is invalid.");
+
+        LOG("Verifying '%s'", pObj->m_szName);
+
+        int nVerifiedSegments = 0;
+        for(size_t iHdrIndex = 0; iHdrIndex < pObj->m_elfHeader.e_phnum; iHdrIndex++)
+        {
+            const Elf64_Phdr* pProHeader = &pObj->m_pProHeader[iHdrIndex];
+            // only PT_LOAD segments are loaded.
+            if(pProHeader->p_type != PT_LOAD)
+                continue;
+
+
+            // Generate SHA-256 hash for this segment using file.
+            if(_GenerateSHA256File(pObj->m_szName, pProHeader->p_filesz, pProHeader->p_offset, hashFile) == false)
+            {
+                FAIL_LOG("Failed to generate SHA-256 for file '%s' segment index '%d'", 
+                        pObj->m_szName, nVerifiedSegments);
+
+                bOk = false; break;
+            }
+
+            // Generate SHA-256 hash for this segment from bytes at address "where it is supposed to be".
+            if(_GenerateSHA256PTrace(pTarget, pProHeader->p_filesz, (void*)(pObj->m_iLoadBase + pProHeader->p_vaddr), hashTarget) == false)
+            {
+                FAIL_LOG("Failed to generate SHA-256 for '%s' for %zu bytes @ %p", 
+                        pObj->m_szName, pProHeader->p_filesz, (void*)(pObj->m_iLoadBase + pProHeader->p_vaddr));
+
+                bOk = false; break;
+            }
+
+
+            if(memcmp(hashFile, hashTarget, SHA256_BLOCK_SIZE) != 0)
+            {
+                FAIL_LOG("SHA-256 Hash didn't match");
+
+                printf("SHA-256 file   : ");
+                for(int i = 0; i < SHA256_BLOCK_SIZE; i++) printf("%02x", hashFile[i]); printf("\n");
+                printf("SHA-256 memory : ");
+                for(int i = 0; i < SHA256_BLOCK_SIZE; i++) printf("%02x", hashTarget[i]); printf("\n");
+
+                bOk = false;
+                break;
+            }
+
+            static char s_szTempBuffer[65] = {0};
+            for(int i = 0; i < SHA256_BLOCK_SIZE; i++)
+                snprintf(s_szTempBuffer + (i * 2), 3, "%02x", hashTarget[i]);
+
+            WIN_LOG("SHA-256 hash matched %s", s_szTempBuffer);
+            
+            nVerifiedSegments++;
+        }
+
+        WIN_LOG("'%s' verified %d segments", pObj->m_szName, nVerifiedSegments);
+    }
+
+
+    Vector_Free(vecUniqueObj);
+    return bOk;
 }
 
 
@@ -655,5 +741,80 @@ static bool _WriteObjToMemory(MappedObject_t* pObj, const MapRange_t* vecObjMaps
     }
 
 
+    return true;
+}
+
+
+///////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////
+static bool _GenerateSHA256File(const char* szFile, size_t nBytes, size_t iOffset, BYTE* pHashOut)
+{
+    SHA256_CTX ctx; sha256_init(&ctx);
+
+    size_t iArenaCapacity = Arena_Capacity(g_pArena);
+    size_t nBytesHashed  = 0;
+
+    while(true)
+    {
+        if(nBytesHashed >= nBytes)
+            break;
+
+        Arena_Memset(g_pArena, 0);
+        void* pBuffer = Arena_AllocateAll(g_pArena);
+
+        // Read n bytes from file.
+        size_t nBytesLeft   = nBytes - nBytesHashed;
+        size_t nBytesToRead = nBytesLeft >= iArenaCapacity ? iArenaCapacity : nBytesLeft;
+        size_t nBytesRead   = Util_ReadFromFile(szFile, pBuffer, iOffset + nBytesHashed, nBytesToRead);
+
+        // Did we failed to read ?
+        if(nBytesRead != nBytesToRead)
+        {
+            FAIL_LOG("An error occured while reading %zu bytes from file %s. Only read %zu bytes.", 
+                    nBytesToRead, szFile, nBytesRead);
+            return false;
+        }
+
+        sha256_update(&ctx, pBuffer, nBytesRead);
+
+        nBytesHashed += nBytesRead;
+    }
+
+    sha256_final(&ctx, pHashOut);
+    return true;
+}
+
+
+///////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////
+static bool _GenerateSHA256PTrace(TargetBrief_t* pTarget, size_t nBytes, void* pVAdrs, BYTE* pHashOut)
+{
+    SHA256_CTX ctx; sha256_init(&ctx);
+
+
+    size_t iArenaCapacity = Arena_Capacity(g_pArena);
+    size_t nBytesHashed  = 0;
+
+    while(true)
+    {
+        if(nBytesHashed >= nBytes)
+            break;
+
+        Arena_Memset(g_pArena, 0);
+        void* pBuffer = Arena_AllocateAll(g_pArena);
+
+        // Read n bytes from target.
+        size_t nBytesLeft   = nBytes - nBytesHashed;
+        size_t nBytesToRead = nBytesLeft >= iArenaCapacity ? iArenaCapacity : nBytesLeft;
+        bool bPTraceReadWin = PTraceHelper_ReadBytes(pBuffer, nBytesToRead, (void*)((uintptr_t)pVAdrs + nBytesHashed), pTarget->m_iTargetPID);
+        if(bPTraceReadWin == false)
+            return false;
+
+        sha256_update(&ctx, pBuffer, nBytesToRead);
+
+        nBytesHashed += nBytesToRead;
+    }
+
+    sha256_final(&ctx, pHashOut);
     return true;
 }

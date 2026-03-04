@@ -121,8 +121,6 @@ bool PTraceHelper_ReadBytes(unsigned char* pBytes, size_t nBytes, void* pAddress
 ///////////////////////////////////////////////////////////////////////////
 bool PTraceHelper_WriteBytesFromFile(const char* szFile, size_t nBytes, size_t iOffset, void* pVAdrs, pid_t iThreadID)
 {
-    Arena_Clear(g_pArena);
-
     size_t iArenaCapacity = Arena_Capacity(g_pArena);
     size_t nBytesWritten  = 0;
 
@@ -131,10 +129,13 @@ bool PTraceHelper_WriteBytesFromFile(const char* szFile, size_t nBytes, size_t i
         if(nBytesWritten >= nBytes)
             break;
 
+        Arena_Memset(g_pArena, 0);
+        void* pBuffer = Arena_AllocateAll(g_pArena);
+
         // Read n bytes from file.
         size_t nBytesLeft   = nBytes - nBytesWritten;
         size_t nBytesToRead = nBytesLeft >= iArenaCapacity ? iArenaCapacity : nBytesLeft;
-        size_t nBytesRead   = Util_ReadFromFile(szFile, g_pArena->m_pMemory, iOffset + nBytesWritten, nBytesToRead);
+        size_t nBytesRead   = Util_ReadFromFile(szFile, pBuffer, iOffset + nBytesWritten, nBytesToRead);
 
         // Did we failed to read ?
         if(nBytesRead != nBytesToRead)
@@ -145,7 +146,7 @@ bool PTraceHelper_WriteBytesFromFile(const char* szFile, size_t nBytes, size_t i
         }
 
         // Write to target process.
-        bool bWriteOpWin = PTraceHelper_WriteBytes(g_pArena->m_pMemory, nBytesRead, (void*)((uintptr_t)pVAdrs + nBytesWritten), iThreadID);
+        bool bWriteOpWin = PTraceHelper_WriteBytes(pBuffer, nBytesRead, (void*)((uintptr_t)pVAdrs + nBytesWritten), iThreadID);
         if(bWriteOpWin == false)
         {
             FAIL_LOG("Failed to write %zu bytes @ %zu using ptrace()", nBytesRead, (size_t)pVAdrs); 
