@@ -36,7 +36,7 @@ typedef struct MapEntry_t
     uint16_t m_iDevMinor;    // device ( minor )
     uint32_t m_iInode;       // inode of device.
 
-    // file path thats backcing this mapping.
+    // file path thats backing this mapping.
     char     m_szPathName[MAX_MAP_PATH_NAME_SIZE]; 
 
     
@@ -46,6 +46,10 @@ typedef struct MapEntry_t
 /* Synchronous. Parse /proc/<procID>/maps file for target process PTARGET and 
    fill in the VECMAPS array ( must be initialized ). */
 void MapParser_Parse(struct TargetBrief_t* pTarget, MapEntry_t** vecMaps);
+
+
+/* for(i < size(map1)) if(vecMaps1[i] != vecMaps2[i]) return false; */
+bool MapParser_Compare(const MapEntry_t* vecMaps1, const MapEntry_t* vecMaps2);
 
 
 #endif

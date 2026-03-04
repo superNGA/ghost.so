@@ -19,11 +19,8 @@
 
 /* 
 
-Final goal. Map target shared object into memory and all its dependencies.
-
-TODO: Ignore finding dependency in the target's maps. Just do it manually.
-TODO: Construct a clean and absolute mmap allocation solution.
-TODO: Construct a clean and absolute mmap free solution.
+TODO: Verify loaded segments.
+TOOD: Fail safely.
 
 */
 
@@ -50,48 +47,54 @@ int main(int nArgs, char** szArgs)
         FAIL_LOG("No such process as %s exists\n", szTargetName);
         return 1;
     }
-
     WIN_LOG("Target process found [ %s ] with pid %d", target.m_szTargetName, target.m_iTargetPID);
 
 
-    MapEntry_t* vecTargetMaps = nullptr; MapParser_Parse(&target, &vecTargetMaps);
-
-
     // .so file to mapped object.
-    MappedObject_t obj;
-    bool bMOInit = MappedObject_Initialize(&obj, "TestELF/testlib.so");
-    LOG("MappedObject Init : %s", bMOInit == true ? "Succeeded" : "Failed");
-
-
-    LOG(".so               : %s", obj.m_szName);
-    LOG("ElfHeaders      @ : %p", *(void**)&obj.m_elfHeader);
-    LOG("Program Headers @ : %p", obj.m_pProHeader);
-    LOG("Dynamic Segment @ : %p", obj.m_pDynamicEntries);
-    LOG("Dependencies    @ : %p", obj.m_pDependencies);
-    LOG("Load base         : %p", obj.m_iLoadBase);
-
-
-    MappedObject_LoadAll(&obj, &target);
-    return 0;
+    MappedObject_t obj; static const char* s_szTestLib = "TestELF/testlib.so";
+    if(MappedObject_Initialize(&obj, s_szTestLib) == false)
+    {
+        FAIL_LOG("Failed to initialize mapped object for %s");
+        return 1;
+    }
 
     
-    if(ShellCode_StopTargetAllThreads(&target) == false)
-        return 1;
+    // pages allocated to this process. ( before modifying, so we can retore to this in case
+    // we fail. )
+    MapEntry_t* vecOriginalMaps = nullptr; MapParser_Parse(&target, &vecOriginalMaps);
 
-    void* pMap = ShellCode_MMap(&target, (void*)0x558c9a002000, 0x1000, 
-            (uint32_t)(PROT_READ | PROT_EXEC), 
-            (uint32_t)(MAP_FIXED_NOREPLACE | MAP_ANONYMOUS | MAP_PRIVATE));
-    int some = ShellCode_MUnMap(&target, (void*)0x558c9a000000, 0x3000);
+
+    // Freeze! This is FBI!
+    ShellCode_StopTargetAllThreads(&target);
+
+    bool bObjLoadWin = MappedObject_LoadAll(&obj, &target);
+    if(bObjLoadWin == false)
+    {
+        FAIL_LOG("Failed to load file '%s' ( + depencencies ) into target process '%s'", s_szTestLib, target.m_szTargetName);
+
+        // Unallocate all allocated memory if we failed.
+        MappedObject_RestoreTo(vecOriginalMaps, &target);
+
+        // Check if we successfully cleaned-up.
+        MapEntry_t* vecNewMaps = nullptr; MapParser_Parse(&target, &vecNewMaps);
+        if(MapParser_Compare(vecOriginalMaps, vecNewMaps) == false)
+        {
+            FAIL_LOG("Failed to cleanup.");
+        }
+        else
+        {
+            WIN_LOG("Cleaned up successfully");
+        }
+        Vector_Free(vecNewMaps);
+
+        goto EXIT;
+    }
     
-    if(ShellCode_StartTargetAllThreads(&target) == false)
-        return 1;
 
-
-    LOG("%d", some);
-    LOG("MMaped @ %p", pMap);
-
-
-    AAManager_UninitializeAll();
+EXIT:
+    // Sorry for the inconvenience sir, you are free to go. :)
+    ShellCode_StartTargetAllThreads(&target);
+    Vector_Free(vecOriginalMaps);
     return 0;
 }
 

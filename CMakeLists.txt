@@ -18,6 +18,7 @@ SET(SOURCE
     "src/MapParser/MapParser.c"
     "src/MappedObject/MappedObject.c"
 
+    "src/Util/SHA-256/sha256.c"
     "src/Util/Terminal/ConsoleSystem.c"
     "src/Util/AAManager/AAManager.c"
     "src/Util/Util.c"

@@ -142,6 +142,30 @@ void MapParser_Parse(struct TargetBrief_t* pTarget, MapEntry_t** vecMaps)
 
 ///////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////
+bool MapParser_Compare(const MapEntry_t* vecMaps1, const MapEntry_t* vecMaps2)
+{
+    if(Vector_Len(vecMaps1) != Vector_Len(vecMaps2))
+        return false;
+
+    for(size_t iMapIndex = 0; iMapIndex < Vector_Len(vecMaps1); iMapIndex++)
+    {
+        const MapEntry_t* pMap1 = &vecMaps1[iMapIndex];
+        const MapEntry_t* pMap2 = &vecMaps2[iMapIndex];
+
+        // NOTE: Doing it this way instead of using sizeof() prevents potential "struct alignment" related bugs.
+        if(memcmp(pMap1, pMap2, (uintptr_t)(&pMap1->m_szPathName[0]) - (uintptr_t)pMap1) != 0)
+            return false;
+
+        if(strncmp(pMap1->m_szPathName, pMap2->m_szPathName, MAX_MAP_PATH_NAME_SIZE) != 0)
+            return false;
+    }
+
+    return true;
+}
+
+
+///////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////
 static uint64_t _HexStringToInt(const char* szString)
 {
     uint64_t iOutput = 0;

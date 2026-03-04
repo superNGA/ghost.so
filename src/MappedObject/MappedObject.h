@@ -17,7 +17,10 @@
 
 #define MAX_MAPPED_OBJECT_NAME_SIZE (128)
 
+
+// Forward Declares...
 struct TargetBrief_t;
+struct MapEntry_t;
 
 
 ///////////////////////////////////////////////////////////////////////////
@@ -48,6 +51,17 @@ bool MappedObject_Initialize(MappedObject_t* pObj, const char* szFile);
 /* Load this MappedObject_t's PT_LOAD segments along with all of its dependencies
    into target process PTARGET's memory. */
 bool MappedObject_LoadAll(MappedObject_t* pHead, struct TargetBrief_t* pTarget);
+
+
+/* Free all maps of process PTARGET that are not present in ILIB MapEntry array 
+   PRESTORETO. */
+bool MappedObject_RestoreTo(
+        const struct MapEntry_t* pRestoreTo, struct TargetBrief_t* pTarget);
+
+
+/* Compare SHA-256 for all loaded segments against segments from the file.
+   Returns false if loaded segment is different from segment on file. */
+bool MappedObject_VerifyLoadedObj(MappedObject_t* pHead, struct TargetBrief_t* pTarget);
 
 
 #endif
