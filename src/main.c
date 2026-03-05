@@ -1,9 +1,9 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <unistd.h>
-#include <errno.h>
 #include <sys/mman.h>
 
+#include "RelocHandler/RelocHandler.h"
 #include "TargetBrief/TargetBrief_t.h"
 #include "MappedObject/MappedObject.h"
 #include "ShellCode/ShellCodeV2.h"
@@ -11,21 +11,22 @@
 
 // Util...
 #include "Util/Terminal/Terminal.h"
-#include "Util/AAManager/AAManager.h"
 
 // ILIB...
 #include "../lib/ILIB/ILIB_Vector.h"
 
 
-/* 
+/*
 
-TODO: Verify loaded segments.
-TOOD: Fail safely.
+TODO: See what to relocate.
+TODO: Relocate easy ones.
+TODO: Relocate hard ones.
 
 */
 
+
 static void PrintDependencyTree(MappedObject_t* pObj, int iIndentation);
-void PrintMapEntries(const MapEntry_t* pEntries, size_t nEntries);
+static void PrintMapEntries(const MapEntry_t* pEntries, size_t nEntries);
 
 
 ///////////////////////////////////////////////////////////////////////////
@@ -68,10 +69,14 @@ int main(int nArgs, char** szArgs)
     ShellCode_StopTargetAllThreads(&target);
 
     bool bObjLoadWin = MappedObject_LoadAll(&obj, &target);
-    if(bObjLoadWin == false)
+    bool bVerified   = true;
+    if(bObjLoadWin == true)
     {
-        FAIL_LOG("Failed to load file '%s' ( + depencencies ) into target process '%s'", s_szTestLib, target.m_szTargetName);
+        bVerified = MappedObject_VerifyLoadedObj(&obj, &target);
+    }
 
+    if(bObjLoadWin == false || bVerified == false)
+    {
         // Unallocate all allocated memory if we failed.
         MappedObject_RestoreTo(vecOriginalMaps, &target);
 
@@ -91,10 +96,14 @@ int main(int nArgs, char** szArgs)
     }
 
 
-    MappedObject_VerifyLoadedObj(&obj, &target);
-    
+    RelocHandler_Reloc(&obj, &target);
+
 
 EXIT:
+    // For testing purpose, we will restore target each time we inject. 
+    // so we don't allocate it infinite memory.
+    MappedObject_RestoreTo(vecOriginalMaps, &target);
+
     // Sorry for the inconvenience sir, you are free to go. :)
     ShellCode_StartTargetAllThreads(&target);
     Vector_Free(vecOriginalMaps);
@@ -121,7 +130,7 @@ static void PrintDependencyTree(MappedObject_t* pObj, int iIndentation)
 
 ///////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////
-void PrintMapEntries(const MapEntry_t* vecEntries, size_t nEntries)
+static void PrintMapEntries(const MapEntry_t* vecEntries, size_t nEntries)
 {
     for(size_t i = 0; i < nEntries; i++)
     {
@@ -146,3 +155,4 @@ void PrintMapEntries(const MapEntry_t* vecEntries, size_t nEntries)
         printf("\n");
     }
 }
+

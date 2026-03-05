@@ -64,4 +64,9 @@ bool MappedObject_RestoreTo(
 bool MappedObject_VerifyLoadedObj(MappedObject_t* pHead, struct TargetBrief_t* pTarget);
 
 
+/* Push back PHEAD and all of its dependencies to PVECOUT ( address of 
+   MappedObject_t** ( array of MappedObject_t*)), skipping repeating dependencies. */
+void MappedObject_CollectUniqueObjects(MappedObject_t* pThisObj, MappedObject_t*** pVecOut);
+
+
 #endif

@@ -17,6 +17,7 @@ SET(SOURCE
     "src/ShellCode/PTraceHelper.c"
     "src/MapParser/MapParser.c"
     "src/MappedObject/MappedObject.c"
+    "src/RelocHandler/RelocHandler.c"
 
     "src/Util/SHA-256/sha256.c"
     "src/Util/Terminal/ConsoleSystem.c"

@@ -78,11 +78,6 @@ static bool _ResolveDependencies(MappedObject_t* pHead, MappedObject_t* pObj);
 static MappedObject_t* _FindDependency(MappedObject_t* pHead, const char* szDependency);
 
 
-/* Push back PHEAD and all of its dependencies to PVECOUT ( address of MappedObject_t** ( array of MappedObject_t*)),
-   skipping repeating dependencies. */
-static void _CollectUniqueObjects(MappedObject_t* pThisObj, MappedObject_t*** pVecOut);
-
-
 /* Generate page aligned map ranges for all PT_LOAD segments of MappedObject_t POBJ. */
 static void _GenerateObjMaps(MapRange_t** vecObjMaps, MappedObject_t* pObj);
 
@@ -145,7 +140,7 @@ bool MappedObject_LoadAll(MappedObject_t* pHead, TargetBrief_t* pTarget)
 
     // pHead + dependencies ( skip repetition. )
     MappedObject_t** vecUniqueObj = nullptr; Vector_Reserve(vecUniqueObj, 1);
-    _CollectUniqueObjects(pHead, &vecUniqueObj);
+    MappedObject_CollectUniqueObjects(pHead, &vecUniqueObj);
 
     MapRange_t* vecObjMaps    = nullptr; // Obj Maps. ( to load )
     MapEntry_t* vecTargetMaps = nullptr; // Target Maps. ( already loaded. )
@@ -273,7 +268,7 @@ bool MappedObject_RestoreTo(const struct MapEntry_t* pRestoreTo, struct TargetBr
 bool MappedObject_VerifyLoadedObj(MappedObject_t* pHead, struct TargetBrief_t* pTarget)
 {
     // pHead + Dependencies ( skip repeating dependencies )
-    MappedObject_t** vecUniqueObj = nullptr; _CollectUniqueObjects(pHead, &vecUniqueObj);
+    MappedObject_t** vecUniqueObj = nullptr; MappedObject_CollectUniqueObjects(pHead, &vecUniqueObj);
 
     BYTE hashFile  [SHA256_BLOCK_SIZE] = {0};
     BYTE hashTarget[SHA256_BLOCK_SIZE] = {0};
@@ -286,7 +281,6 @@ bool MappedObject_VerifyLoadedObj(MappedObject_t* pHead, struct TargetBrief_t* p
         // invalid load base -> not initialized.
         assertion(pObj->m_iLoadBase != 0 && "Load base is 0. This MappedObject_t is invalid.");
 
-        LOG("Verifying '%s'", pObj->m_szName);
 
         int nVerifiedSegments = 0;
         for(size_t iHdrIndex = 0; iHdrIndex < pObj->m_elfHeader.e_phnum; iHdrIndex++)
@@ -338,12 +332,41 @@ bool MappedObject_VerifyLoadedObj(MappedObject_t* pHead, struct TargetBrief_t* p
             nVerifiedSegments++;
         }
 
-        WIN_LOG("'%s' verified %d segments", pObj->m_szName, nVerifiedSegments);
+        LOG("'%s' verified %d segments", pObj->m_szName, nVerifiedSegments);
     }
 
 
     Vector_Free(vecUniqueObj);
     return bOk;
+}
+
+
+///////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////
+void MappedObject_CollectUniqueObjects(MappedObject_t* pThisObj, MappedObject_t*** pVecOut)
+{
+    // Is this object already pushed? 
+    bool bRepeating = false;
+    for(int i = 0; i < Vector_Len(*pVecOut); i++)
+    {
+        if((*pVecOut)[i] == pThisObj)
+        {
+            bRepeating = true;
+            break;
+        }
+    }
+    
+
+    // If not pushed already push it back.
+    if(bRepeating == false)
+        Vector_PushBack(*pVecOut, pThisObj);
+
+
+    // Recurse on dependencies.
+    for(int i = 0; i < pThisObj->m_nDependencies; i++)
+    {
+        MappedObject_CollectUniqueObjects(pThisObj->m_pDependencies[i], pVecOut);
+    }
 }
 
 
@@ -594,35 +617,6 @@ static MappedObject_t* _FindDependency(MappedObject_t* pHead, const char* szDepe
     }
 
     return nullptr;
-}
-
-
-///////////////////////////////////////////////////////////////////////////
-///////////////////////////////////////////////////////////////////////////
-static void _CollectUniqueObjects(MappedObject_t* pThisObj, MappedObject_t*** pVecOut)
-{
-    // Is this object already pushed? 
-    bool bRepeating = false;
-    for(int i = 0; i < Vector_Len(*pVecOut); i++)
-    {
-        if((*pVecOut)[i] == pThisObj)
-        {
-            bRepeating = true;
-            break;
-        }
-    }
-    
-
-    // If not pushed already push it back.
-    if(bRepeating == false)
-        Vector_PushBack(*pVecOut, pThisObj);
-
-
-    // Recurse on dependencies.
-    for(int i = 0; i < pThisObj->m_nDependencies; i++)
-    {
-        _CollectUniqueObjects(pThisObj->m_pDependencies[i], pVecOut);
-    }
 }
 
 
